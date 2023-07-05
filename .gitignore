@@ -1,0 +1,9 @@
+# Ignore .pyc files
+*.pyc
+
+# Ignore __pycache__ directories
+__pycache__/
+
+# Ignore .ipynb_checkpoints directories
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
