@@ -29,7 +29,7 @@ The `TrainingData` object can be easily saved out for later use.
 
 We can plot the mean spectra for each class in via `TrainingData.plot_spectra()`:
 
-![plot_spectra_example](https://github.com/naglemi/cubeml/blob/main/plot_examples/plot_spectra_output.png?raw=true)
+![plot_spectra_example](https://github.com/naglemi/cubeml/blob/main/plot_examples/plot_spectra_output.png?raw=true | width = 300)
 
 ## 3. Training models
 
