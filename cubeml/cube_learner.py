@@ -6,12 +6,15 @@ from sklearn.ensemble import AdaBoostClassifier as ABC
 from sklearn.linear_model import LogisticRegression as LR
 from sklearn.naive_bayes import GaussianNB as GNB
 from sklearn.tree import DecisionTreeClassifier as DTC
+from sklearn.metrics import f1_score
 from sklearn.model_selection import KFold
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import GridSearchCV
 from sklearn.model_selection import cross_val_score
 from sklearn.metrics import confusion_matrix
 from scipy.optimize import minimize
+from deap import base, creator, tools, algorithms
+import random
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
@@ -57,8 +60,12 @@ class CubeLearner:
         self.wavelengths_dict = training_data.wavelengths_dict
         self.feature_names = None
         self.num_classes = np.unique(self.labels).shape[0]  # Assuming labels are numerical and start from 0
-
-    def fit(self, colors=None, automl = False, verbose = False, **kwargs):
+        self.optimal_params = None
+        
+    def fit(self, colors=None, automl = False, verbose = False,
+            param_distributions = None,
+            param_ranges = None,
+            **kwargs):
         """
         Fit the appropriate model to the training data.
         """
@@ -104,43 +111,207 @@ class CubeLearner:
 
 
         elif self.model_type in ["RF", "GBC", "ABC", "LR", "GNB", "DTC"]:
-            if self.model_type in ["RF", "DTC"] and automl in ["grid", "gradient"]:
-                param_distributions = {
-                    'max_depth': [None, 10, 20, 30, 40, 50],
-                    'min_samples_split': [100, 200, 500],
-                    'min_samples_leaf': [50, 100, 200],
-                }
-                param_ranges = {
-                    'max_depth': (30, 50),
-                    'min_samples_split': (50, 200),
-                    'min_samples_leaf': (25, 100),
+            if self.model_type in ["RF", "DTC", "GBC"] and automl in ["grid", "genetic"]:
+                print("Debugging here")
+                default_param_distributions = {
+                    'RF': {
+                        'n_estimators': [50,
+                                         #100,
+                                         150],
+                        'max_depth': [5,
+                                      #10, 15,
+                                      20],
+                        'min_samples_split': [50,
+                                              #100,
+                                              150],
+                        'min_samples_leaf': [10,
+                                             #20,
+                                             30],
+                        'max_features': ['sqrt', 'log2'],
+                        'criterion': ['gini', 'entropy']
+                    },
+                    'DTC': {
+                        'max_depth': [5,
+                                      #10, 15,
+                                      20],
+                        'min_samples_split': [50,
+                                              #100,
+                                              150],
+                        'min_samples_leaf': [10,
+                                             #20,
+                                             30],
+                        'max_features': ['sqrt', 'log2'],
+                        'criterion': ['gini', 'entropy']
+                    },
+                    'GBC': {
+                        'n_estimators': [50,
+                                         #100,
+                                         150],
+                        'learning_rate': [0.01,
+                                          #0.05,
+                                          0.1],
+                        'max_depth': [2,
+                                      #3,
+                                      4],
+                        'min_samples_leaf': [10,
+                                             #20,
+                                             30],
+                        'max_features': [0.1,
+                                         #0.3,
+                                         0.5]
+                    }
                 }
 
-                if self.model_type == "RF":
-                    param_distributions['n_estimators'] = [100, 200, 300, 400, 500]
-                    param_ranges['n_estimators'] = (300, 500)
-                    model = RF()
-                elif self.model_type == "DTC":
-                    model = DTC()
+                model = models_dict[self.model_type]()
+
 
                 def objective(params):
-                    params_int = {key: int(val) for key, val in zip(param_ranges.keys(), params)}
-                    model.set_params(**params_int)
+                    # Combine current numeric parameters with non-numeric parameters
+                    current_params = {**non_numeric_param_ranges, **{k: v for k, v in zip(numeric_param_ranges.keys(), params)}}
+                    model.set_params(**current_params)
                     return -np.mean(cross_val_score(model, self.features_train, self.labels_train, cv=3, n_jobs=-1))
 
+
                 if automl == "grid":
-                    self.model = GridSearchCV(
-                        model, param_grid=param_distributions, cv=3, n_jobs=-1
+                    if param_distributions is None or not isinstance(param_distributions, dict):
+                        param_distributions = default_param_distributions
+                        print("Running grid search with default param distributions")
+                    grid_search_cv = GridSearchCV(
+                        model, param_grid=param_distributions[self.model_type], cv=3, n_jobs=-1
                     )
-                    self.model.fit(self.features_train, self.labels_train)
-                    print("Best parameters found: ", self.model.best_params_)
-                elif automl == "gradient":
-                    initial_params = [np.mean(r) for r in param_ranges.values()]
-                    result = minimize(objective, initial_params, bounds=param_ranges.values())
-                    model.set_params(**{key: int(val) for key, val in zip(param_ranges.keys(), result.x)})
+                    grid_search_cv.fit(self.features_train, self.labels_train)
+                    self.optimal_params = grid_search_cv.best_params_
+                    self.model = grid_search_cv.best_estimator_  # Assign the model with optimal parameters to self.model
+                    print("Best parameters found (in self.optimal_params with grid argument): ", self.optimal_params)
+                    
+                # For genetic search
+                if automl == "genetic":
+                    if param_ranges is None:
+                        param_ranges = default_param_distributions[self.model_type]
+                        print("Running genetic algorithm with default param ranges")
+
+                    # Identify and store fixed parameters
+                    fixed_params = {k: v[0] for k, v in param_ranges.items() if len(v) == 1}
+
+                    # Determine type of each parameter and ensure integer ranges are handled correctly
+                    int_param_ranges = {k: range(int(v[0]), int(v[-1]) + 1) for k, v in param_ranges.items() if isinstance(v[0], int) and len(v) > 1}
+                    float_param_ranges = {k: v for k, v in param_ranges.items() if isinstance(v[0], float) and len(v) > 1}
+                    cat_param_ranges = {k: v for k, v in param_ranges.items() if isinstance(v[0], str) and len(v) > 1}
+
+                    total_params = len(list(int_param_ranges.keys()) + list(float_param_ranges.keys()) + list(cat_param_ranges.keys()))
+                    if total_params < 2:
+                        raise ValueError("Genetic algorithm requires at least two parameters. Only {} parameter(s) found.".format(total_params))
+
+                    print("Param ranges before separation:", param_ranges)
+                    print("Fixed parameters:", fixed_params)
+                    print("Total variable parameters:", total_params)
+                    print("Integer parameter ranges:", int_param_ranges)
+                    print("Float parameter ranges:", float_param_ranges)
+                    print("Categorical parameter ranges:", cat_param_ranges)
+                    
+                    def mutate_integer(individual, indpb, min_value, max_value):
+                        for i in individual:
+                            if random.random() < indpb:
+                                individual[i] += random.randint(-abs(max_value - min_value), abs(max_value - min_value))
+                                individual[i] = max(min_value, min(individual[i], max_value))
+                        return individual,
+                    
+                    # Sanity check for the length of the individuals
+                    def sanity_check_individual(individual):
+                        if len(individual) <= 1:
+                            raise ValueError("Individuals must contain more than one parameter. Check the parameter ranges and individual creation.")
+                            
+                    # Define custom crossover function with sanity checks
+                    def custom_cxTwoPoint(ind1, ind2):
+                        sanity_check_individual(ind1)
+                        sanity_check_individual(ind2)
+                        return tools.cxTwoPoint(ind1, ind2)
+                    
+                    def custom_mutation(ind):
+                        for i, (key, val) in enumerate(int_param_ranges.items()):
+                            min_value, max_value = val
+                            toolbox.mutate_integer(ind[i:i+1], min_value=min_value, max_value=max_value)
+                        for i, key in enumerate(list(float_param_ranges.keys()), start=len(int_param_ranges)):
+                            tools.mutGaussian(ind[i:i+1], mu=0, sigma=1, indpb=0.1)
+                        return ind,
+
+
+                    creator.create("FitnessMax", base.Fitness, weights=(1.0,))
+                    creator.create("Individual", list, fitness=creator.FitnessMax)
+                    
+                    toolbox = base.Toolbox()
+                    
+                    # Register custom crossover function
+                    toolbox.register("mate", custom_cxTwoPoint)
+
+                    for key, val in int_param_ranges.items():
+                        toolbox.register(key, random.randint, val[0], val[1])
+
+                    for key, val in float_param_ranges.items():
+                        toolbox.register(key, random.uniform, val[0], val[1])
+
+                    for key, val in cat_param_ranges.items():
+                        toolbox.register(key, random.choice, val)
+                        
+                    def init_individual():
+                        attributes = []
+                        for key in list(int_param_ranges.keys()) + list(float_param_ranges.keys()) + list(cat_param_ranges.keys()):
+                            attributes.append(toolbox.__getattribute__(key)())
+                        return creator.Individual(attributes)
+
+                    toolbox.register("individual", init_individual)
+
+                    toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+                    
+                    # Additional sanity checks for individual sizes
+                    for ind in toolbox.population(n=50):
+                        sanity_check_individual(ind)
+
+
+                    # Create validation set
+                    self.features_train, self.features_val, self.labels_train, self.labels_val = train_test_split(
+                        self.features_train, self.labels_train, test_size=0.2, random_state=42)
+
+
+                    def evalOneMax(individual):
+                        params = {k: v for k, v in zip(list(int_param_ranges.keys()) + list(float_param_ranges.keys()) + list(cat_param_ranges.keys()), individual)}
+                        model.set_params(**params)
+                        model.fit(self.features_train, self.labels_train)
+                        # Use validation set for evaluation
+                        predictions = model.predict(self.features_val)
+                        return f1_score(self.labels_val, predictions, average='micro'),
+
+
+                    toolbox.register("evaluate", evalOneMax)
+                    #toolbox.register("mate", tools.cxTwoPoint) # replaced w custom function
+                    toolbox.register("mutate", custom_mutation)
+                    # Registering integer mutation function for integer parameters
+                    toolbox.register("mutate_integer", mutate_integer, indpb=0.1)
+
+                    toolbox.register("select", tools.selTournament, tournsize=3)
+
+                    pop = toolbox.population(n=50)
+                    hof = tools.HallOfFame(1)
+                    stats = tools.Statistics(lambda ind: ind.fitness.values)
+                    stats.register("avg", np.mean)
+                    stats.register("min", np.min)
+                    stats.register("max", np.max)
+
+                    pop, log = algorithms.eaSimple(pop, toolbox, cxpb=0.5, mutpb=0.5, ngen=40, stats=stats, halloffame=hof, verbose=True)
+
+                    optimal_params = {key: val for key, val in zip(list(int_param_ranges.keys()) + list(float_param_ranges.keys()) + list(cat_param_ranges.keys()), hof[0])}
+                    
+                    # Merge fixed parameters with the optimal parameters found by the genetic algorithm
+                    optimal_params_with_fixed = {**fixed_params, **optimal_params}
+
+                    # Set the model's parameters using the merged dictionary
+                    model.set_params(**optimal_params_with_fixed)
                     self.model = model
                     self.model.fit(self.features_train, self.labels_train)
-                    print("Best parameters found: ", {key: int(val) for key, val in zip(param_ranges.keys(), result.x)})
+                    self.optimal_params = optimal_params_with_fixed
+                
+                if automl == "grid" or automl == "genetic":
+                    print("Best parameters found (in self.optimal_params with either grid or genetic argument): ", self.optimal_params)
 
             else:
                 self.model = models_dict[self.model_type](**kwargs)

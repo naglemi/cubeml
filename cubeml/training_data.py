@@ -12,7 +12,7 @@ from matplotlib.colors import ListedColormap
 from matplotlib.lines import Line2D
 
 class TrainingData:
-    def __init__(self, json_file=None, img_directory=None, png_directory=None, df=None):
+    def __init__(self, json_file=None, img_directory=None, png_directory=None, df=None, normalize_features=False):
         self.json_file = json_file
         self.img_directory = img_directory
         self.png_directory = png_directory
@@ -22,6 +22,7 @@ class TrainingData:
         self.wavelengths_dict = {} 
         self.labels_key_df = None
         self.labels_char = None
+        self.normalize_features = normalize_features
         self.create_training_data()
         self.factorize_labels()
 
@@ -91,6 +92,11 @@ class TrainingData:
 
                     # Select pixels
                     selected_pixels = hypercube_np[label_img_np == 1]
+                    
+                    # Normalize the pixel values if normalize_features is True
+                    if self.normalize_features:
+                        selected_pixels = selected_pixels / selected_pixels.max(axis=1, keepdims=True)
+
 
                     # Append features and labels
                     features_list.append(selected_pixels)
