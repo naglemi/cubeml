@@ -1,8 +1,6 @@
 # cubeml
 CubeML is a Python package to support semantic segmentation of reflectance-hyperspectral images (hypercubes) using diverse machine learning (ML) approaches.
 
-In Oregon State University's Forest Biotechnology Laboratory, we have long relied on semantic segmentation of RGB images. However, the reflectance-hyperspectral approach offers key advantages in accelerating training: 1) We don't need to label every single pixel in every training image; and 2) We can apply relatively more simple ML/DL methods that don't require very long period of training and hyperparameter optimization.
-
 In this readme, we will walk through basic use of CubeML for use in semantic segmentation to support research. 
 
 This is an early work-in-progress as of August 2023. A more complete beta with support for more model types, checks, and more documentation is forthcoming.
