@@ -332,8 +332,12 @@ class CubeLearner:
                             else:
                                 max_fitness = max(valid_fitnesses)
 
+                            # Check convergence criteria
                             last_max_scores.pop(0)  # remove oldest score
-                            last_max_scores.append(max_fitness)  # add newest max score
+                            last_max_scores.append(stats.compile(pop)["max"])  # add newest max score
+
+                            if halloffame is not None:  # ensure that halloffame is populated
+                                halloffame.update(pop)
 
                             if np.std(last_max_scores) < convergence_threshold:
                                 print("Convergence criteria met. Halting genetic algorithm.")
