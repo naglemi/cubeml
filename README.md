@@ -13,7 +13,7 @@ These false color images can then be loaded into [LabelStudio](https://labelstud
 ## 2. Load hyperspectral data and labels as `TrainingData` class
 Let's first initialize the TrainingData object, using the json file and png files output from LabelStudio, along with our raw hyperspectral data. It is suggested to set `normalize_features` to `True` for best performance when brightness may fluctuate.
 
-```
+``` python
 training_data = TrainingData(
     json_file=json_file,
     img_directory=hypercube_dir,
@@ -23,11 +23,15 @@ training_data = TrainingData(
 
 Do you have a very large and imbalanced training dataset (e.g., a million pixels of class X, and only 50,000 for class Y)? If so, taking a stratified sample will balance your dataset. Each class will be represented by the same number of pixels as the class with the least representation.
 
-```training_data.stratified_sample()```
+``` python
+training_data.stratified_sample()
+```
 
 The `TrainingData` object can be easily saved out for later use.
 
-```pickle.dump(training_data, open(filename, 'wb'))```
+``` python
+pickle.dump(training_data, open(filename, 'wb'))
+```
 
 We can plot the mean spectra for each class in via `TrainingData.plot_spectra()`. You can see an example plot [here](https://github.com/naglemi/cubeml/blob/main/plot_examples/plot_spectra_output.png?raw=true)
 
@@ -38,7 +42,7 @@ We can plot the mean spectra for each class in via `TrainingData.plot_spectra()`
 #### 3A.i. Basic use
 
 Here is a basic example, in which we'll use default hyperparameters to train Linear Discriminant Analysis (LDA) model.
-```
+``` python
 my_model = CubeLearner(training_data,
                        model_type = "LDA")
 my_model.fit()
@@ -48,23 +52,14 @@ my_model.fit()
 
 Several of the ML methods used here, including Gradient Boosting Classifiers (GBC), Decision Tree Classifiers (DTC) and Random Forests (RF) can undergo an automated hyperparameter optimization process. The suggested approach is to first employ a grid search, then fine-tune pseudo-optimized parameters output from the grid search using a genetic optimization algorithm.
 
-```
+``` python
 my_model = CubeLearner(training_data, model_type="RF")
 
 # First run Grid Search to pseudo-optimize parameters
-learner_dict[model_type].fit(automl="grid")
+my_model.fit(automl="grid")
 
 # Based on pseudo-optimized parameters, build parameter ranges for fine-tuning
-param_ranges = {}
-for k, v in learner_dict[model_type].optimal_params.items():
-    param_type = type(learner_dict[model_type].model.get_params()[k]) # Getting the type of parameter from the original model
-
-    if isinstance(v, int) and param_type in [int, np.int32, np.int64]:  # If parameter is integer
-        param_ranges[k] = (int(0.8 * v), int(1.2 * v)) # adjust range as required
-    elif isinstance(v, float) and param_type in [float, np.float32, np.float64]: # If parameter is float
-        param_ranges[k] = (0.8 * v, 1.2 * v)  # adjust range as required
-    elif isinstance(v, str) or v is None:  # If parameter is a string or None
-        param_ranges[k] = [v]  # use list with single value
+param_ranges = get_param_ranges(learner_dict, model_type)
 
 my_model.fit(automl="genetic", param_ranges=param_ranges)
 ```
@@ -73,7 +68,7 @@ my_model.fit(automl="genetic", param_ranges=param_ranges)
 
 We can train many models with the same `TrainingData` and compare the performance of various algorithms.
 
-```
+``` python
 model_types = ["PCA", "LDA", "RF", "GBC", "ABC", "LR", "GNB", "DTC"]
 
 school = CubeSchool(training_data, model_types, colors)
