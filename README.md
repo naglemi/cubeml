@@ -69,7 +69,7 @@ my_model.fit(automl="genetic", param_ranges=param_ranges)
 We can train many models with the same `TrainingData` and compare the performance of various algorithms.
 
 ``` python
-model_types = ["PCA", "LDA", "RF", "GBC", "ABC", "LR", "GNB", "DTC"]
+model_types = ["PCA", "LDA", "RF", "GBC", "ABC", "LR", "GNB", "DTC", "TNN"]
 
 school = CubeSchool(training_data, model_types, colors)
 school.run()
