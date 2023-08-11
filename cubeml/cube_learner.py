@@ -65,6 +65,8 @@ class CubeLearner:
     def fit(self, colors=None, automl = False, verbose = False,
             param_distributions = None,
             param_ranges = None,
+            convergence_threshold = 0.001,
+            convergence_gen = 5,
             **kwargs):
         """
         Fit the appropriate model to the training data.
@@ -194,7 +196,7 @@ class CubeLearner:
                     fixed_params = {k: v[0] for k, v in param_ranges.items() if len(v) == 1}
 
                     # Determine type of each parameter and ensure integer ranges are handled correctly
-                    int_param_ranges = {k: range(int(v[0]), int(v[-1]) + 1) for k, v in param_ranges.items() if isinstance(v[0], int) and len(v) > 1}
+                    int_param_ranges = {k: (int(v[0]), int(v[-1])) for k, v in param_ranges.items() if isinstance(v[0], int) and len(v) > 1}
                     float_param_ranges = {k: v for k, v in param_ranges.items() if isinstance(v[0], float) and len(v) > 1}
                     cat_param_ranges = {k: v for k, v in param_ranges.items() if isinstance(v[0], str) and len(v) > 1}
 
@@ -210,10 +212,11 @@ class CubeLearner:
                     print("Categorical parameter ranges:", cat_param_ranges)
                     
                     def mutate_integer(individual, indpb, min_value, max_value):
-                        for i in individual:
+                        for i in range(len(individual)):
                             if random.random() < indpb:
                                 individual[i] += random.randint(-abs(max_value - min_value), abs(max_value - min_value))
                                 individual[i] = max(min_value, min(individual[i], max_value))
+
                         return individual,
                     
                     # Sanity check for the length of the individuals
@@ -280,6 +283,63 @@ class CubeLearner:
                         # Use validation set for evaluation
                         predictions = model.predict(self.features_val)
                         return f1_score(self.labels_val, predictions, average='micro'),
+                    
+                    def custom_eaSimple(pop, toolbox, cxpb, mutpb, ngen, stats=None, halloffame=None, convergence_threshold = 0.0001, convergence_gen = 5, verbose=__debug__):
+                        log = []  # To record stats, if you wish to
+                        for gen in range(ngen):
+                            
+                            print(f"Generation {gen}, Population Size: {len(pop)}")
+                            print(f"Fitness values: {[ind.fitness.values[0] for ind in pop if ind.fitness.valid]}")
+
+                            # Step 1: Evaluation of the Population
+                            fitnesses = list(map(toolbox.evaluate, pop))
+                            for ind, fit in zip(pop, fitnesses):
+                                ind.fitness.values = fit
+
+                            # Step 2: Selection
+                            selected = toolbox.select(pop, len(pop))
+
+                            # Clone the selected individuals (important to avoid aliasing issues)
+                            offspring = list(map(toolbox.clone, selected))
+
+                            # Step 3: Variation
+                            # Crossover
+                            for child1, child2 in zip(offspring[::2], offspring[1::2]):
+                                if random.random() < cxpb:
+                                    toolbox.mate(child1, child2)
+                                    del child1.fitness.values
+                                    del child2.fitness.values
+
+                            # Mutation
+                            for mutant in offspring:
+                                if random.random() < mutpb:
+                                    toolbox.mutate(mutant)
+                                    del mutant.fitness.values
+
+                            # Step 4: Re-evaluation
+                            fitnesses = list(map(toolbox.evaluate, offspring))
+                            for ind, fit in zip(offspring, fitnesses):
+                                ind.fitness.values = fit
+
+                            # Step 5: Replacement
+                            pop[:] = offspring
+
+                            # Ensure at least one individual has a valid fitness
+                            valid_fitnesses = [ind.fitness.values[0] for ind in pop if ind.fitness.valid]
+                            if not valid_fitnesses:
+                                print(f"Warning: No valid fitness values in generation {gen}.")
+                                max_fitness = -np.inf  # or a default value
+                            else:
+                                max_fitness = max(valid_fitnesses)
+
+                            last_max_scores.pop(0)  # remove oldest score
+                            last_max_scores.append(max_fitness)  # add newest max score
+
+                            if np.std(last_max_scores) < convergence_threshold:
+                                print("Convergence criteria met. Halting genetic algorithm.")
+                                break
+
+                        return pop, log
 
 
                     toolbox.register("evaluate", evalOneMax)
@@ -296,8 +356,11 @@ class CubeLearner:
                     stats.register("avg", np.mean)
                     stats.register("min", np.min)
                     stats.register("max", np.max)
+                    
+                    last_max_scores = [0] * convergence_gen
 
-                    pop, log = algorithms.eaSimple(pop, toolbox, cxpb=0.5, mutpb=0.5, ngen=40, stats=stats, halloffame=hof, verbose=True)
+
+                    pop, log = custom_eaSimple(pop, toolbox, cxpb=0.5, mutpb=0.5, ngen=40, stats=stats, halloffame=hof, convergence_threshold = convergence_threshold, verbose=True)
 
                     optimal_params = {key: val for key, val in zip(list(int_param_ranges.keys()) + list(float_param_ranges.keys()) + list(cat_param_ranges.keys()), hof[0])}
                     
