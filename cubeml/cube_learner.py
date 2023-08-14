@@ -1,3 +1,7 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.tensorboard import SummaryWriter
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.ensemble import RandomForestClassifier as RF
@@ -61,12 +65,45 @@ class CubeLearner:
         self.feature_names = None
         self.num_classes = np.unique(self.labels).shape[0]  # Assuming labels are numerical and start from 0
         self.optimal_params = None
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+    class TransformerNN(nn.Module):
+        def __init__(self, n_input_features, num_classes, d_model=64, num_heads=4, num_dense_layers=3):
+            super(CubeLearner.TransformerNN, self).__init__()
+
+            self.embedding = nn.Linear(n_input_features, d_model)
+            self.attention = nn.MultiheadAttention(d_model, num_heads)
+            self.norm = nn.LayerNorm(d_model)
+
+            self.denses = nn.ModuleList([nn.Linear(d_model // (2 ** i), d_model // (2 ** (i + 1))) for i in range(num_dense_layers)])
+            self.output = nn.Linear(d_model // (2 ** num_dense_layers), num_classes)
+
+        def forward(self, x, pos_enc):
+            x = self.embedding(x) + pos_enc
+            attn_output, _ = self.attention(x, x, x)
+            x = self.norm(x + attn_output)
+
+            for dense in self.denses:
+                x = nn.ReLU()(dense(x))
+
+            x = self.output(x)
+            return nn.Softmax(dim=1)(x)
+
+    @staticmethod
+    def get_positional_encoding(seq_len, d_model):
+        positions = torch.arange(seq_len).unsqueeze(1)
+        div_terms = torch.exp(torch.arange(0, d_model, 2) * -(np.log(10000.0) / d_model))
+        pos_enc = torch.zeros(seq_len, d_model)
+        pos_enc[:, 0::2] = torch.sin(positions * div_terms)
+        pos_enc[:, 1::2] = torch.cos(positions * div_terms)
+        return pos_enc
         
     def fit(self, colors=None, automl = False, verbose = False,
             param_distributions = None,
             param_ranges = None,
             convergence_threshold = 0.001,
             convergence_gen = 5,
+            d_model=64, num_heads=4, num_dense_layers=3, n_epoch = 10,
             **kwargs):
         """
         Fit the appropriate model to the training data.
@@ -86,6 +123,43 @@ class CubeLearner:
         assert len(self.features_train.shape) == len(self.features_test.shape), "Train and test features dimensions do not match"
 
         start_time = time.time()
+        
+        if self.model_type == "TNN":
+            writer = SummaryWriter()  # initialize the tensorboard writer
+
+            n_input_features = self.features_train.shape[1]
+            self.model = CubeLearner.TransformerNN(n_input_features, self.num_classes, d_model=d_model, num_heads=num_heads, num_dense_layers=num_dense_layers)
+            self.model.to(self.device) # use GPU if desired
+
+            # Loss and optimizer
+            criterion = nn.CrossEntropyLoss()
+            optimizer = optim.Adam(self.model.parameters())
+
+            pos_enc = self.get_positional_encoding(n_input_features, d_model).to(self.device)
+
+
+            for epoch in range(n_epoch):
+                outputs = self.model(torch.tensor(self.features_train).float().to(self.device), pos_enc)
+                
+                loss = criterion(outputs, torch.tensor(self.labels_train).long().to(self.device))
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                
+                # Log the loss to TensorBoard
+                writer.add_scalar("Loss/train", loss.item(), epoch)
+
+                if verbose:
+                    print(f"Epoch {epoch+1}/{n_epoch}, Loss: {loss.item():.4f}")
+                    
+            # Save predictions for training and test data
+            with torch.no_grad():
+                self.results_train = torch.argmax(self.model(torch.tensor(self.features_train).float().to(self.device), pos_enc), dim=1).cpu().numpy()
+                self.results_test = torch.argmax(self.model(torch.tensor(self.features_test).float().to(self.device), pos_enc), dim=1).cpu().numpy()
+                
+            writer.close()
+
 
         if self.model_type == "PCA":
             self.model = PCA(0.95, **kwargs)  # keep enough components to explain 95% of variance
