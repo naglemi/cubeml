@@ -79,6 +79,20 @@ class CubeLearner:
             self.output = nn.Linear(d_model // (2 ** num_dense_layers), num_classes)
 
         def forward(self, x, pos_enc):
+            print(f"Expected input tensor shape: [batch_size, sequence_length, embedding_dim]")
+            print(f"Shape of the embedded input tensor 'x': {x.shape}")
+            print(f"Shape of the positional encoding tensor 'pos_enc': {pos_enc.shape}")
+            _, pos_enc_length, _ = pos_enc.shape
+            print(f"Positional encoding sequence length: {pos_enc_length}")
+            print(f"Model's expected embedding dimension: {self.embedding.embedding_dim}")
+            batch_size, seq_length, _ = x.shape
+            print(f"Number of samples in the batch: {batch_size}")
+            print(f"Sequence length in the input tensor: {seq_length}")
+            
+            if seq_length != pos_enc_length:
+                print("Mismatch detected: Input tensor sequence length doesn't match with positional encoding sequence length.")
+
+
             x = self.embedding(x) + pos_enc
             attn_output, _ = self.attention(x, x, x)
             x = self.norm(x + attn_output)
