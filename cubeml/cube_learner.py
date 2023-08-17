@@ -82,7 +82,7 @@ class CubeLearner:
             print(f"Expected input tensor shape: [batch_size, sequence_length, embedding_dim]")
             print(f"Shape of the embedded input tensor 'x': {x.shape}")
             print(f"Shape of the positional encoding tensor 'pos_enc': {pos_enc.shape}")
-            _, pos_enc_length, _ = pos_enc.shape
+            pos_enc_length, embedding_dim = pos_enc.shape
             print(f"Positional encoding sequence length: {pos_enc_length}")
             print(f"Model's expected embedding dimension: {self.embedding.embedding_dim}")
             batch_size, seq_length, _ = x.shape
