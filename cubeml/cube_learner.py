@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
+from torch.utils.data import DataLoader, TensorDataset
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.ensemble import RandomForestClassifier as RF
@@ -33,8 +34,10 @@ models_dict = {
     "ABC": ABC,
     "LR": LR,
     "GNB": GNB,
-    "DTC": DTC
+    "DTC": DTC,
+    "TNN": "TNN"
 }
+
 
 class CubeLearner:
     def __init__(self, training_data, model_type, colors=None,
@@ -68,40 +71,77 @@ class CubeLearner:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
     class TransformerNN(nn.Module):
-        def __init__(self, n_input_features, num_classes, d_model=64, num_heads=4, num_dense_layers=3):
+        def __init__(self, n_input_features, num_classes, d_model=64, num_heads=4, num_dense_layers=3, use_embedding=True):
             super(CubeLearner.TransformerNN, self).__init__()
+            self.use_embedding = use_embedding
 
-            self.embedding = nn.Linear(n_input_features, d_model)
+            if self.use_embedding:
+                self.embedding = nn.Linear(n_input_features, d_model)
+                
             self.attention = nn.MultiheadAttention(d_model, num_heads)
             self.norm = nn.LayerNorm(d_model)
 
             self.denses = nn.ModuleList([nn.Linear(d_model // (2 ** i), d_model // (2 ** (i + 1))) for i in range(num_dense_layers)])
             self.output = nn.Linear(d_model // (2 ** num_dense_layers), num_classes)
 
-        def forward(self, x, pos_enc):
-            print(f"Expected input tensor shape: [batch_size, sequence_length, embedding_dim]")
-            print(f"Shape of the embedded input tensor 'x': {x.shape}")
-            print(f"Shape of the positional encoding tensor 'pos_enc': {pos_enc.shape}")
-            pos_enc_length, embedding_dim = pos_enc.shape
-            print(f"Positional encoding sequence length: {pos_enc_length}")
-            print(f"Model's expected embedding dimension: {self.embedding.embedding_dim}")
-            batch_size, seq_length, _ = x.shape
-            print(f"Number of samples in the batch: {batch_size}")
-            print(f"Sequence length in the input tensor: {seq_length}")
-            
-            if seq_length != pos_enc_length:
-                print("Mismatch detected: Input tensor sequence length doesn't match with positional encoding sequence length.")
+        def forward(self, x, pos_enc, verbose="normal"):
+            if verbose == "debug":
+                print(f"Initial input shape: {x.shape}")
 
+            if verbose == "debug":
+                print(f"Initial input shape: {x.shape}")
 
-            x = self.embedding(x) + pos_enc
+            if self.use_embedding:
+                x = self.embedding(x)
+                if verbose == "debug":
+                    print(f"After embedding shape: {x.shape}")
+
+            # Get sequence length from the positional encoding size
+            seq_len = pos_enc.shape[0]
+            if verbose == "debug":
+                print(f"Positional encoding sequence length: {seq_len}")
+
+            x = x.unsqueeze(1)
+            if verbose == "debug":
+                print(f"After unsqueezing: {x.shape}")
+
+            x = x.expand(-1, seq_len, -1)
+            if verbose == "debug":
+                print(f"After expanding to match positional encoding shape: {x.shape}")
+
+            expanded_pos_enc = pos_enc.unsqueeze(0).expand(x.shape[0], -1, -1)
+            if verbose == "debug":
+                print(f"Expanded positional encoding shape: {expanded_pos_enc.shape}")
+
+            x = x + expanded_pos_enc
+            if verbose == "debug":
+                print(f"Shape after adding positional encoding to input: {x.shape}")
+
             attn_output, _ = self.attention(x, x, x)
+            if verbose == "debug":
+                print(f"Attention output shape: {attn_output.shape}")
+
             x = self.norm(x + attn_output)
+            if verbose == "debug":
+                print(f"Shape after normalization: {x.shape}")
+
+            # Here, we'll aggregate over the sequence length using mean
+            # This will reduce the sequence dimension
+            x = x.mean(dim=1)
+            if verbose == "debug":
+                print(f"Shape after mean pooling over sequence length: {x.shape}")
 
             for dense in self.denses:
                 x = nn.ReLU()(dense(x))
+                if verbose == "debug":
+                    print(f"Shape after dense layer: {x.shape}")
 
             x = self.output(x)
-            return nn.Softmax(dim=1)(x)
+            if verbose == "debug":
+                print(f"Final output shape: {x.shape}")
+
+            return x
+
 
     @staticmethod
     def get_positional_encoding(seq_len, d_model):
@@ -111,13 +151,27 @@ class CubeLearner:
         pos_enc[:, 0::2] = torch.sin(positions * div_terms)
         pos_enc[:, 1::2] = torch.cos(positions * div_terms)
         return pos_enc
+    
+    
+    def predict_in_batches(model, data, pos_enc, batch_size, device):
+        model.eval()  # Set model to evaluation mode
+        outputs = []
+        for i in range(0, len(data), batch_size):
+            batch_data = data[i: i + batch_size].float().to(device)
+            with torch.no_grad():
+                output = model(batch_data, pos_enc)
+            outputs.append(output)
+        return torch.cat(outputs, dim=0)
+
+
         
-    def fit(self, colors=None, automl = False, verbose = False,
+    def fit(self, colors=None, automl = False, verbose = True,
             param_distributions = None,
             param_ranges = None,
             convergence_threshold = 0.001,
             convergence_gen = 5,
-            d_model=64, num_heads=4, num_dense_layers=3, n_epoch = 10,
+            d_model=64, num_heads=4, num_dense_layers=3,
+            n_epoch = 1000, batch_size = 256,
             **kwargs):
         """
         Fit the appropriate model to the training data.
@@ -139,6 +193,12 @@ class CubeLearner:
         start_time = time.time()
         
         if self.model_type == "TNN":
+            print("Fitting TNN")
+            n_input_features = self.features_train.shape[1]
+            
+            dataset = TensorDataset(torch.tensor(self.features_train).float(), torch.tensor(self.labels_train).long())
+            dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+            
             writer = SummaryWriter()  # initialize the tensorboard writer
 
             n_input_features = self.features_train.shape[1]
@@ -151,26 +211,45 @@ class CubeLearner:
 
             pos_enc = self.get_positional_encoding(n_input_features, d_model).to(self.device)
 
-
             for epoch in range(n_epoch):
-                outputs = self.model(torch.tensor(self.features_train).float().to(self.device), pos_enc)
-                
-                loss = criterion(outputs, torch.tensor(self.labels_train).long().to(self.device))
+                total_loss = 0.0
+                total_correct = 0
+                total_samples = 0
+                for batch_features, batch_labels in dataloader:
+                    batch_features, batch_labels = batch_features.to(self.device), batch_labels.to(self.device)
 
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                
-                # Log the loss to TensorBoard
-                writer.add_scalar("Loss/train", loss.item(), epoch)
+                    outputs = self.model(batch_features, pos_enc)
+
+                    loss = criterion(outputs, batch_labels)
+                    total_loss += loss.item() * batch_features.size(0)  # accumulate batch loss
+
+                    _, predicted = torch.max(outputs, 1)
+                    total_correct += (predicted == batch_labels).sum().item()
+                    total_samples += batch_labels.size(0)
+
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                # Calculate average loss and accuracy over the epoch
+                avg_loss = total_loss / total_samples
+                accuracy = total_correct / total_samples
+
+                # Log to TensorBoard
+                writer.add_scalar("Loss/train", avg_loss, epoch)
+                writer.add_scalar("Accuracy/train", accuracy, epoch)
+                for name, param in self.model.named_parameters():
+                    writer.add_histogram(name, param, epoch)
 
                 if verbose:
-                    print(f"Epoch {epoch+1}/{n_epoch}, Loss: {loss.item():.4f}")
+                    print(f"Epoch {epoch+1}/{n_epoch}, Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}")
+
                     
             # Save predictions for training and test data
             with torch.no_grad():
-                self.results_train = torch.argmax(self.model(torch.tensor(self.features_train).float().to(self.device), pos_enc), dim=1).cpu().numpy()
-                self.results_test = torch.argmax(self.model(torch.tensor(self.features_test).float().to(self.device), pos_enc), dim=1).cpu().numpy()
+                # Added lines
+                self.results_train = torch.argmax(CubeLearner.predict_in_batches(self.model, torch.tensor(self.features_train), pos_enc, batch_size, self.device), dim=1).cpu().numpy()
+                self.results_test = torch.argmax(CubeLearner.predict_in_batches(self.model, torch.tensor(self.features_test), pos_enc, batch_size, self.device), dim=1).cpu().numpy()
                 
             writer.close()
 
@@ -188,8 +267,7 @@ class CubeLearner:
 
             self.results_train = self.model.predict(self.features_train)
             self.results_test = self.model.predict(self.features_test)
-
-            # Added lines
+            
             self.transformed_train = self.model.transform(self.features_train)
             self.transformed_test = self.model.transform(self.features_test)
 
@@ -496,8 +574,9 @@ class CubeLearner:
                     print(f'Warning: The {self.model_type} model might overfit. Training score is {train_score}.')
                     print('Consider stweaking model parameters to reduce overfitting.')
 
-        else:
+        elif self.model_type != "TNN":
             raise ValueError(f"Invalid model type: {self.model_type}")
+
 
         # Generate confusion matrix for the training data for certain models
         if self.model_type != "PCA":
