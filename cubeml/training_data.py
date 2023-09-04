@@ -10,9 +10,12 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 from matplotlib.lines import Line2D
+import h5py
+import warnings
 
 class TrainingData:
-    def __init__(self, json_file=None, img_directory=None, png_directory=None, df=None, normalize_features=False):
+    def __init__(self, json_file=None, img_directory=None, png_directory=None, df=None, 
+                 normalize_features=False, use_hdf5=False, hdf5_path=None):
         self.json_file = json_file
         self.img_directory = img_directory
         self.png_directory = png_directory
@@ -23,8 +26,26 @@ class TrainingData:
         self.labels_key_df = None
         self.labels_char = None
         self.normalize_features = normalize_features
+        self.use_hdf5 = use_hdf5
+        self.hdf5_path = hdf5_path
         self.create_training_data()
         self.factorize_labels()
+
+    def save_to_hdf5(self):
+        """
+        Save features and labels to an hdf5 file.
+        """
+        with h5py.File(self.hdf5_path, 'w') as hf:
+            hf.create_dataset('features', data=self.features)
+            hf.create_dataset('labels', data=self.labels)
+
+    def load_from_hdf5(self):
+        """
+        Load features and labels from an hdf5 file.
+        """
+        with h5py.File(self.hdf5_path, 'r') as hf:
+            self.features = np.array(hf['features'])
+            self.labels = np.array(hf['labels'])
 
     def load_data(self):
         """
@@ -59,12 +80,25 @@ class TrainingData:
         self.create_training_data()
         self.factorize_labels()
         
-    def create_training_data(self):
+    def create_training_data(self, use_hdf5=False, hdf5_path="training_data.hdf5", chunk_size=1000):
         """
         Function to create training data from hyperspectral images and PNG files.
         """
         features_list = []
         labels_list = []
+
+        # Set up hdf5 storage
+        if use_hdf5:
+            hdf5_file = h5py.File(hdf5_path, 'a')
+            if 'features' not in hdf5_file:
+                maxshape = (None, ) + self.features.shape[1:]
+                hdf5_features = hdf5_file.create_dataset("features", shape=(0, ) + self.features.shape[1:], maxshape=maxshape, dtype=self.features.dtype)
+                hdf5_labels = hdf5_file.create_dataset("labels", shape=(0,), maxshape=(None,), dtype=self.labels.dtype)
+            else:
+                hdf5_features = hdf5_file["features"]
+                hdf5_labels = hdf5_file["labels"]
+
+        png_files = glob.glob(self.png_directory + "*.png")
 
         for i in range(len(self.df)):
             row = self.df.loc[i]
@@ -78,7 +112,6 @@ class TrainingData:
 
             hypercube_np = np.array(test_cube.hypercube)
             assert hypercube_np.ndim == 3, f"Hyperspectral image for task {task_id} is not 3-dimensional"
-            png_files = glob.glob(self.png_directory + "*.png")
 
             for png_file in png_files:
                 file_task_id, label = extract_task_and_label(png_file)
@@ -92,20 +125,43 @@ class TrainingData:
 
                     # Select pixels
                     selected_pixels = hypercube_np[label_img_np == 1]
-                    
+
                     # Normalize the pixel values if normalize_features is True
                     if self.normalize_features:
                         selected_pixels = selected_pixels / selected_pixels.max(axis=1, keepdims=True)
-
 
                     # Append features and labels
                     features_list.append(selected_pixels)
                     labels_list.extend([label] * selected_pixels.shape[0])
 
-        # Concatenate all the data
-        self.features = np.concatenate(features_list, axis=0)
-        self.labels = np.array(labels_list)
+                    # Save to hdf5 if the accumulated data reaches chunk_size
+                    if use_hdf5 and len(features_list) >= chunk_size:
+                        current_len = hdf5_features.shape[0]
+                        hdf5_features.resize(current_len + len(features_list), axis=0)
+                        hdf5_features[current_len:] = np.concatenate(features_list, axis=0)
+                        hdf5_labels.resize(current_len + len(labels_list), axis=0)
+                        hdf5_labels[current_len:] = np.array(labels_list)
 
+                        # Reset the features_list and labels_list
+                        features_list = []
+                        labels_list = []
+
+        # If there is remaining data in the lists (less than chunk_size), save it to hdf5
+        if use_hdf5 and features_list:
+            current_len = hdf5_features.shape[0]
+            hdf5_features.resize(current_len + len(features_list), axis=0)
+            hdf5_features[current_len:] = np.concatenate(features_list, axis=0)
+            hdf5_labels.resize(current_len + len(labels_list), axis=0)
+            hdf5_labels[current_len:] = np.array(labels_list)
+
+        # If using RAM, concatenate all the data
+        elif not use_hdf5:
+            self.features = np.concatenate(features_list, axis=0)
+            self.labels = np.array(labels_list)
+
+        if use_hdf5:
+            # Close hdf5 file after writing all the data
+            hdf5_file.close()
 
     def factorize_labels(self):
         """
@@ -133,12 +189,42 @@ class TrainingData:
 
 
 
-    def plot_spectra(self, colors, sampling_fraction=0.01,
-                     verbose: bool = False):
-        num_features = len(self.features)
-        num_labels = len(self.labels)
+    def plot_spectra(self, colors, sampling_fraction=0.01, hdf5_path=None, chunk_size=1000, verbose: bool = False):
+        # If hdf5_path is specified, read from it. Otherwise, assume in-memory.
+        if hdf5_path:
+            with h5py.File(hdf5_path, 'r') as hdf5_file:
+                num_features = hdf5_file["features"].shape[0]
+                num_labels = hdf5_file["labels"].shape[0]
 
-        if verbose == True:
+                # Sample the features and labels
+                num_samples = int(num_features * sampling_fraction)
+                sample_indices = np.random.choice(num_features, num_samples, replace=False)
+
+                # Collect sampled features and labels
+                sampled_features_list = []
+                sampled_labels_list = []
+                for idx in sample_indices:
+                    feature_chunk_start = (idx // chunk_size) * chunk_size
+                    feature_chunk_end = min(feature_chunk_start + chunk_size, num_features)
+
+                    if feature_chunk_start <= idx < feature_chunk_end:
+                        offset = idx - feature_chunk_start
+                        sampled_features_list.append(hdf5_file["features"][feature_chunk_start:feature_chunk_end][offset])
+                        sampled_labels_list.append(hdf5_file["labels"][feature_chunk_start:feature_chunk_end][offset])
+
+                sampled_features = np.array(sampled_features_list)
+                sampled_labels = np.array(sampled_labels_list)
+        else:
+            num_features = len(self.features)
+            num_labels = len(self.labels)
+
+            # Sample the features and labels before converting to a dataframe
+            num_samples = int(len(self.features) * sampling_fraction)
+            sample_indices = np.random.choice(len(self.features), num_samples, replace=False)
+            sampled_features = np.array(self.features)[sample_indices]
+            sampled_labels = np.array(self.labels)[sample_indices]
+
+        if verbose:
             print(f"Number of features: {num_features}")
             print(f"Number of labels: {num_labels}")
 
@@ -153,15 +239,8 @@ class TrainingData:
         # Convert unique_wavelengths into a DataFrame
         wavelengths_df = pd.DataFrame(unique_wavelengths, columns=['Wavelength(nm)'])
 
-        # Sample the features and labels before converting to a dataframe
-        num_samples = int(len(self.features) * sampling_fraction)
-        sample_indices = np.random.choice(len(self.features), num_samples, replace=False)
-        sampled_features = np.array(self.features)[sample_indices]
-        sampled_labels = np.array(self.labels)[sample_indices]
-
+        # Convert the sampled data to a DataFrame
         df = pd.DataFrame(sampled_features)
-
-        # add label data to the dataframe and rename each column using the corresponding wavelength
         df.columns = wavelengths_df['Wavelength(nm)']
         df['Label'] = sampled_labels
 
@@ -201,10 +280,25 @@ class TrainingData:
         plt.tight_layout()
         return fig
 
-    def stratified_sample(self, sample_size=None):
-        # Combine features and labels into a single DataFrame for easy sampling
-        data = pd.DataFrame(self.features)
-        data['Label'] = self.labels
+    def stratified_sample(self, sample_size=None, hdf5_path=None, chunk_size=1000):
+        # If hdf5_path is specified, assume that the data is in an HDF5 file.
+        if hdf5_path:
+            with h5py.File(hdf5_path, 'r') as hdf5_file:
+                features_dataset = hdf5_file['features']
+                labels_dataset = hdf5_file['labels']
+
+                # Convert to arrays. Note: This assumes that the whole dataset can fit into memory after sampling.
+                # If this isn't the case, more complex chunked processing would be required.
+                all_features = np.array(features_dataset)
+                all_labels = np.array(labels_dataset)
+
+                # Combine features and labels into a single DataFrame
+                data = pd.DataFrame(all_features)
+                data['Label'] = all_labels
+        else:
+            # For in-memory data
+            data = pd.DataFrame(self.features)
+            data['Label'] = self.labels
 
         # If sample_size is None, set it to the size of the smallest class
         if sample_size is None:
@@ -221,7 +315,6 @@ class TrainingData:
         # Update features and labels
         self.features = stratified_data.drop(columns='Label').values
         self.labels = stratified_data['Label'].values
-
 
 def load_hyperspectral_image(file, min_wavelength=400, max_wavelength=1000):
     """Load a hyperspectral image and return as numpy array."""
