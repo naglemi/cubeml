@@ -15,7 +15,7 @@ import warnings
 
 class TrainingData:
     def __init__(self, json_file=None, img_directory=None, png_directory=None, df=None, 
-                 normalize_features=False, use_hdf5=False, hdf5_path=None):
+                 normalize_features=False, use_hdf5=False, hdf5_path=None, label_remapping=None):
         self.json_file = json_file
         self.img_directory = img_directory
         self.png_directory = png_directory
@@ -28,8 +28,13 @@ class TrainingData:
         self.normalize_features = normalize_features
         self.use_hdf5 = use_hdf5
         self.hdf5_path = hdf5_path
-        self.create_training_data()
+        self.label_remapping = label_remapping
+        if self.use_hdf5 and self.hdf5_path is not None and os.path.exists(self.hdf5_path):
+            self.load_from_hdf5()
+        else:
+            self.create_training_data(self.use_hdf5, self.hdf5_path)
         self.factorize_labels()
+
 
     def save_to_hdf5(self):
         """
@@ -41,11 +46,16 @@ class TrainingData:
 
     def load_from_hdf5(self):
         """
-        Load features and labels from an hdf5 file.
+        Load features, labels, and wavelengths from an hdf5 file.
         """
         with h5py.File(self.hdf5_path, 'r') as hf:
             self.features = np.array(hf['features'])
             self.labels = np.array(hf['labels'])
+
+            # Load the wavelengths_dict
+            for key in hf['wavelengths'].keys():
+                self.wavelengths_dict[key] = np.array(hf['wavelengths'][key])
+
 
     def load_data(self):
         """
@@ -77,7 +87,7 @@ class TrainingData:
         new_df: new DataFrame to be added
         """
         self.df = pd.concat([self.df, new_df], ignore_index=True)
-        self.create_training_data()
+        self.create_training_data(self.use_hdf5, self.hdf5_path)
         self.factorize_labels()
         
     def create_training_data(self, use_hdf5=False, hdf5_path="training_data.hdf5", chunk_size=1000):
@@ -87,105 +97,144 @@ class TrainingData:
         features_list = []
         labels_list = []
 
-        # Set up hdf5 storage
-        if use_hdf5:
-            hdf5_file = h5py.File(hdf5_path, 'a')
-            if 'features' not in hdf5_file:
-                maxshape = (None, ) + self.features.shape[1:]
-                hdf5_features = hdf5_file.create_dataset("features", shape=(0, ) + self.features.shape[1:], maxshape=maxshape, dtype=self.features.dtype)
-                hdf5_labels = hdf5_file.create_dataset("labels", shape=(0,), maxshape=(None,), dtype=self.labels.dtype)
-            else:
-                hdf5_features = hdf5_file["features"]
-                hdf5_labels = hdf5_file["labels"]
+        hdf5_features, hdf5_labels = None, None
+
+        # Check if hdf5 file exists and delete
+        if use_hdf5 and os.path.exists(hdf5_path):
+            os.remove(hdf5_path)
 
         png_files = glob.glob(self.png_directory + "*.png")
+        print(f"Number of PNG files found: {len(png_files)}")
 
-        for i in range(len(self.df)):
-            row = self.df.loc[i]
-            task_id = row['id']
+        try:
+            for i in range(len(self.df)):
+                print(f"Processing row {i}/{len(self.df)} of the dataframe...")
+                row = self.df.loc[i]
+                task_id = row['id']
 
-            # Load the hypercube
-            test_cube = Hypercube(row['hdr_img'], min_desired_wavelength=400, max_desired_wavelength=1000)
+                # Load the hypercube
+                test_cube = Hypercube(row['hdr_img'], min_desired_wavelength=400, max_desired_wavelength=1000)
 
-            # Save the wavelengths before converting the hypercube to a numpy array
-            self.wavelengths_dict[row['hdr_img']] = test_cube.wavelengths
+                # Save the wavelengths before converting the hypercube to a numpy array
+                self.wavelengths_dict[row['hdr_img']] = test_cube.wavelengths
 
-            hypercube_np = np.array(test_cube.hypercube)
-            assert hypercube_np.ndim == 3, f"Hyperspectral image for task {task_id} is not 3-dimensional"
+                hypercube_np = np.array(test_cube.hypercube)
+                assert hypercube_np.ndim == 3, f"Hyperspectral image for task {task_id} is not 3-dimensional"
+                print(f"Shape of hypercube for task {task_id}: {hypercube_np.shape}")
 
-            for png_file in png_files:
-                file_task_id, label = extract_task_and_label(png_file)
+                # Set up hdf5 storage based on the shape of the first file during the first iteration
+                if i == 0 and use_hdf5:
+                    print("Setting up hdf5 storage...")
+                    with h5py.File(hdf5_path, 'a') as hdf5_file:
+                        if 'features' not in hdf5_file:
+                            initial_shape = (0, hypercube_np.shape[2])
+                            maxshape = (None, hypercube_np.shape[2])
+                            hdf5_features = hdf5_file.create_dataset("features", shape=initial_shape, maxshape=maxshape, dtype=hypercube_np.dtype)
+                            hdf5_labels = hdf5_file.create_dataset("labels", shape=(0,), maxshape=(None,), dtype=h5py.special_dtype(vlen=str))
+                        else:
+                            hdf5_features = hdf5_file["features"]
+                            hdf5_labels = hdf5_file["labels"]
 
-                if file_task_id == task_id:
-                    label_img_np = load_label_image(png_file)
+                for png_file in png_files:
+                    file_task_id, label = extract_task_and_label(png_file)
 
-                    # Rotate if necessary
-                    if label_img_np.shape != hypercube_np.shape[:2]:
-                        label_img_np = np.rot90(np.rot90(np.rot90(label_img_np)))
+                    # Replace label if present in the mapping
+                    if self.label_remapping and label in self.label_remapping:  # <-- Add these lines
+                        label = self.label_remapping[label]
 
-                    # Select pixels
-                    selected_pixels = hypercube_np[label_img_np == 1]
+                    if file_task_id == task_id:
+                        label_img_np = load_label_image(png_file)
+                        print(f"Shape of label image for task {task_id}: {label_img_np.shape}")
 
-                    # Normalize the pixel values if normalize_features is True
-                    if self.normalize_features:
-                        selected_pixels = selected_pixels / selected_pixels.max(axis=1, keepdims=True)
+                        # Rotate if necessary
+                        if label_img_np.shape != hypercube_np.shape[:2]:
+                            label_img_np = np.rot90(np.rot90(np.rot90(label_img_np)))
 
-                    # Append features and labels
-                    features_list.append(selected_pixels)
-                    labels_list.extend([label] * selected_pixels.shape[0])
+                        # Select pixels
+                        selected_pixels = hypercube_np[label_img_np == 1]
+                        print(f"Number of selected pixels for label {label}: {selected_pixels.shape[0]}")
 
-                    # Save to hdf5 if the accumulated data reaches chunk_size
-                    if use_hdf5 and len(features_list) >= chunk_size:
+                        # Normalize the pixel values if normalize_features is True
+                        if self.normalize_features:
+                            selected_pixels = selected_pixels / selected_pixels.max(axis=1, keepdims=True)
+
+                        # Append features and labels
+                        features_list.append(selected_pixels)
+                        labels_list.extend([label] * selected_pixels.shape[0])
+                        
+                # Save to hdf5 at the end of each i iteration
+                if use_hdf5:
+                    print("Saving to hdf5 file...")
+                    with h5py.File(hdf5_path, 'a') as hdf5_file:
+                        hdf5_features = hdf5_file["features"]
+                        hdf5_labels = hdf5_file["labels"]
+
                         current_len = hdf5_features.shape[0]
-                        hdf5_features.resize(current_len + len(features_list), axis=0)
-                        hdf5_features[current_len:] = np.concatenate(features_list, axis=0)
+                        new_data = np.concatenate(features_list, axis=0)
+                        print(f"Current hdf5 features length: {current_len}. About to add: {new_data.shape[0]}")
+
+                        hdf5_features.resize(current_len + new_data.shape[0], axis=0)
+                        hdf5_features[current_len:] = new_data
                         hdf5_labels.resize(current_len + len(labels_list), axis=0)
-                        hdf5_labels[current_len:] = np.array(labels_list)
+                        hdf5_labels[current_len:] = np.array(labels_list, dtype=object)
+
 
                         # Reset the features_list and labels_list
                         features_list = []
                         labels_list = []
 
-        # If there is remaining data in the lists (less than chunk_size), save it to hdf5
-        if use_hdf5 and features_list:
-            current_len = hdf5_features.shape[0]
-            hdf5_features.resize(current_len + len(features_list), axis=0)
-            hdf5_features[current_len:] = np.concatenate(features_list, axis=0)
-            hdf5_labels.resize(current_len + len(labels_list), axis=0)
-            hdf5_labels[current_len:] = np.array(labels_list)
+            # If using RAM, concatenate all the data
+            if not use_hdf5:
+                self.features = np.concatenate(features_list, axis=0)
+                self.labels = np.array(labels_list)
+                print(f"Final features shape (RAM): {self.features.shape}. Final labels shape (RAM): {self.labels.shape}")
 
-        # If using RAM, concatenate all the data
-        elif not use_hdf5:
-            self.features = np.concatenate(features_list, axis=0)
-            self.labels = np.array(labels_list)
+        except Exception as e:
+            print(f"An error occurred: {e}")
 
-        if use_hdf5:
-            # Close hdf5 file after writing all the data
-            hdf5_file.close()
 
     def factorize_labels(self):
         """
         Convert character labels to integer labels and store
         a key to go from integers back to original labels
         """
-        # Convert labels to lowercase and sort
-        labels_raw = [label.lower() for label in self.labels]
-        sorted_labels = np.sort(np.unique(labels_raw))
+        if self.use_hdf5:
+            with h5py.File(self.hdf5_path, 'r+') as hf:  # Open in read+write mode
+                # Check if labels are already integers
+                first_label = hf['labels'][0]
+                if isinstance(first_label, np.int64):
+                    labels_int = hf['labels'][:]
+                    unique_labels = list(set(labels_int))
+                else:
+                    # Extract unique labels from hdf5 in their original order
+                    labels_raw = [label.decode('utf-8').lower() for label in hf['labels']]
+                    _, unique_indices = np.unique(labels_raw, return_index=True)
+                    unique_labels = [labels_raw[i] for i in sorted(unique_indices)]
 
-        # Create a dictionary that maps each label to an integer
-        labels_dict = {k: v for v, k in enumerate(sorted_labels)}
+                    # Create a dictionary that maps each label to an integer
+                    labels_dict = {k: v for v, k in enumerate(unique_labels)}
 
-        # Map the original labels to integers
-        labels_int = [labels_dict[label] for label in labels_raw]
+                    # Map the original labels to integers
+                    labels_int = np.array([labels_dict[label] for label in labels_raw], dtype=int)
 
-        # Construct label key dataframe
-        self.labels_key_df = pd.DataFrame({'Label': sorted_labels, 'Integer': range(len(sorted_labels))})
+                    # Replace labels in the hdf5 file
+                    del hf['labels']  # delete the old labels dataset
+                    hf.create_dataset('labels', data=labels_int)  # create a new dataset with integer labels
 
-        # Assign the integer labels
-        self.labels = np.array(labels_int)
+        else:
+            labels_raw = [label.lower() for label in self.labels]
+            _, unique_indices = np.unique(labels_raw, return_index=True)
+            unique_labels = [labels_raw[i] for i in sorted(unique_indices)]
+            labels_dict = {k: v for v, k in enumerate(unique_labels)}
+            labels_int = [labels_dict[label] for label in labels_raw]
+            self.labels = np.array(labels_int)
 
-        # Initialize self.labels_raw with sorted labels
-        self.labels_char = sorted_labels
+        # Construct label key dataframe for both cases (HDF5 and in-memory)
+        self.labels_key_df = pd.DataFrame({'Label': unique_labels, 'Integer': range(len(unique_labels))})
+
+        # Initialize self.labels_char with unique labels
+        self.labels_char = unique_labels
+
 
 
 
@@ -282,27 +331,38 @@ class TrainingData:
 
     def stratified_sample(self, sample_size=None, hdf5_path=None, chunk_size=1000):
         # If hdf5_path is specified, assume that the data is in an HDF5 file.
+        print("Debugging stratified_sample")
         if hdf5_path:
             with h5py.File(hdf5_path, 'r') as hdf5_file:
                 features_dataset = hdf5_file['features']
                 labels_dataset = hdf5_file['labels']
 
-                # Convert to arrays. Note: This assumes that the whole dataset can fit into memory after sampling.
-                # If this isn't the case, more complex chunked processing would be required.
+                print(f"Features dataset shape: {features_dataset.shape}")
+                print(f"Labels dataset shape: {labels_dataset.shape}")
+
+                # Convert to arrays.
                 all_features = np.array(features_dataset)
                 all_labels = np.array(labels_dataset)
 
                 # Combine features and labels into a single DataFrame
                 data = pd.DataFrame(all_features)
                 data['Label'] = all_labels
+
+                print(data.head())  # Check the first few rows of the DataFrame
+
         else:
             # For in-memory data
             data = pd.DataFrame(self.features)
             data['Label'] = self.labels
 
+        print("Counts before stratified sampling:")
+        print(data['Label'].value_counts())
+            
         # If sample_size is None, set it to the size of the smallest class
         if sample_size is None:
             sample_size = data['Label'].value_counts().min()
+            print(f"Smallest sample size before sampling: {sample_size}")
+
         else:
             # Warn if sample_size is greater than the size of any class
             smallest_class_size = data['Label'].value_counts().min()
@@ -316,11 +376,6 @@ class TrainingData:
         self.features = stratified_data.drop(columns='Label').values
         self.labels = stratified_data['Label'].values
 
-def load_hyperspectral_image(file, min_wavelength=400, max_wavelength=1000):
-    """Load a hyperspectral image and return as numpy array."""
-    cube = Hypercube(file, min_desired_wavelength=min_wavelength, max_desired_wavelength=max_wavelength)
-    return np.array(cube.hypercube)
-
 def load_label_image(file):
     """Load a label image and return as a binary numpy array."""
     img = Image.open(file)
@@ -332,48 +387,3 @@ def extract_task_and_label(filename):
     label = re.search(r'tag-([A-Za-z_]+)', filename).group(1)
     return task_id, label
 
-def match_and_process_images(df, png_directory):
-    """Match hyperspectral and label images, process them, and return features and labels."""
-    features_list = []
-    labels_list = []
-    
-    png_files = glob.glob(png_directory + "*.png")
-
-    for i in range(len(df)):
-        row = df.loc[i]
-        hypercube_np = load_hyperspectral_image(row['hdr_img'])
-
-        for png_file in png_files:
-            file_task_id, label = extract_task_and_label(png_file)
-
-            if file_task_id == row['id']:
-                label_img_np = load_label_image(png_file)
-
-                # Rotate if necessary
-                if label_img_np.shape != hypercube_np.shape[:2]:
-                    label_img_np = np.rot90(np.rot90(np.rot90(label_img_np)))
-
-                # Select pixels
-                selected_pixels = hypercube_np[label_img_np == 1]
-
-                # Append features and labels
-                features_list.append(selected_pixels)
-                labels_list.extend([label] * selected_pixels.shape[0])
-
-    # Concatenate all the data
-    features = np.concatenate(features_list, axis=0)
-    labels = np.array(labels_list)
-    
-    return features, labels
-
-def factorize_labels(labels):
-    """Convert labels into factorized integer form."""
-    labels_int, labels_key = pd.factorize(labels)
-    return labels_int
-
-def generate_training_data(df, png_directory):
-    """Generate training data from hyperspectral and label images."""
-    training_data = TrainingData()
-    training_data.features, training_data.labels = match_and_process_images(df, png_directory)
-    training_data.labels = factorize_labels(training_data.labels)
-    return training_data
