@@ -12,6 +12,7 @@ from matplotlib.colors import ListedColormap
 from matplotlib.lines import Line2D
 import h5py
 import warnings
+import pickle
 
 class TrainingData:
     def __init__(self, json_file=None, img_directory=None, png_directory=None, df=None, 
@@ -50,12 +51,17 @@ class TrainingData:
         """
         with h5py.File(self.hdf5_path, 'r') as hf:
             self.features = np.array(hf['features'])
-            self.labels = np.array(hf['labels'])
 
-            # Load the wavelengths_dict
-            for key in hf['wavelengths'].keys():
-                self.wavelengths_dict[key] = np.array(hf['wavelengths'][key])
+            # Check the type of the labels before attempting to decode
+            if hf['labels'].dtype.kind == 'S':  # byte-encoded string
+                self.labels = np.array([label.decode('utf-8') for label in hf['labels']])
+            else:  # assume labels are integers or another type that doesn't need decoding
+                self.labels = np.array(hf['labels'])
 
+            # Load the wavelengths_dict from .pkl file
+            pkl_path = self.hdf5_path.rsplit('.', 1)[0] + '.pkl'
+            with open(pkl_path, 'rb') as pkl_file:
+                self.wavelengths_dict = pickle.load(pkl_file)
 
     def load_data(self):
         """
@@ -96,8 +102,7 @@ class TrainingData:
         """
         features_list = []
         labels_list = []
-
-        hdf5_features, hdf5_labels = None, None
+        hdf5_features, hdf5_labels, wavelengths_group = None, None, None
 
         # Check if hdf5 file exists and delete
         if use_hdf5 and os.path.exists(hdf5_path):
@@ -135,11 +140,17 @@ class TrainingData:
                             hdf5_features = hdf5_file["features"]
                             hdf5_labels = hdf5_file["labels"]
 
+                        # Setting up storage for wavelengths
+                        if 'wavelengths' not in hdf5_file:
+                            wavelengths_group = hdf5_file.create_group('wavelengths')
+                        else:
+                            wavelengths_group = hdf5_file['wavelengths']
+
                 for png_file in png_files:
                     file_task_id, label = extract_task_and_label(png_file)
 
                     # Replace label if present in the mapping
-                    if self.label_remapping and label in self.label_remapping:  # <-- Add these lines
+                    if self.label_remapping and label in self.label_remapping:
                         label = self.label_remapping[label]
 
                     if file_task_id == task_id:
@@ -161,7 +172,7 @@ class TrainingData:
                         # Append features and labels
                         features_list.append(selected_pixels)
                         labels_list.extend([label] * selected_pixels.shape[0])
-                        
+
                 # Save to hdf5 at the end of each i iteration
                 if use_hdf5:
                     print("Saving to hdf5 file...")
@@ -175,9 +186,14 @@ class TrainingData:
 
                         hdf5_features.resize(current_len + new_data.shape[0], axis=0)
                         hdf5_features[current_len:] = new_data
-                        hdf5_labels.resize(current_len + len(labels_list), axis=0)
-                        hdf5_labels[current_len:] = np.array(labels_list, dtype=object)
 
+                        # Debugging print for label conversion
+                        print(f"Original labels dtype: {type(labels_list[0]) if labels_list else None}")
+                        labels_array = np.array(labels_list, dtype="S")
+                        print(f"Converted labels dtype: {labels_array.dtype}")
+
+                        hdf5_labels.resize(current_len + len(labels_list), axis=0)
+                        hdf5_labels[current_len:] = labels_array
 
                         # Reset the features_list and labels_list
                         features_list = []
@@ -189,8 +205,15 @@ class TrainingData:
                 self.labels = np.array(labels_list)
                 print(f"Final features shape (RAM): {self.features.shape}. Final labels shape (RAM): {self.labels.shape}")
 
+            # After finishing all iterations, save wavelengths_dict to a .pkl file
+            if use_hdf5:
+                pkl_path = hdf5_path.rsplit('.', 1)[0] + '.pkl'
+                with open(pkl_path, 'wb') as pkl_file:
+                    pickle.dump(self.wavelengths_dict, pkl_file)
+
         except Exception as e:
             print(f"An error occurred: {e}")
+
 
 
     def factorize_labels(self):
@@ -329,35 +352,20 @@ class TrainingData:
         plt.tight_layout()
         return fig
 
-    def stratified_sample(self, sample_size=None, hdf5_path=None, chunk_size=1000):
-        # If hdf5_path is specified, assume that the data is in an HDF5 file.
+    def stratified_sample(self, sample_size=None, chunk_size=1000):
         print("Debugging stratified_sample")
-        if hdf5_path:
-            with h5py.File(hdf5_path, 'r') as hdf5_file:
-                features_dataset = hdf5_file['features']
-                labels_dataset = hdf5_file['labels']
 
-                print(f"Features dataset shape: {features_dataset.shape}")
-                print(f"Labels dataset shape: {labels_dataset.shape}")
+        # Check if the features and labels attributes are None or empty, indicating the need to load data from hdf5
+        if self.features is None or len(self.features) == 0:
+            self.load_from_hdf5()
 
-                # Convert to arrays.
-                all_features = np.array(features_dataset)
-                all_labels = np.array(labels_dataset)
-
-                # Combine features and labels into a single DataFrame
-                data = pd.DataFrame(all_features)
-                data['Label'] = all_labels
-
-                print(data.head())  # Check the first few rows of the DataFrame
-
-        else:
-            # For in-memory data
-            data = pd.DataFrame(self.features)
-            data['Label'] = self.labels
+        # At this point, whether from hdf5 or originally in RAM, data is in self.features and self.labels
+        data = pd.DataFrame(self.features)
+        data['Label'] = self.labels
 
         print("Counts before stratified sampling:")
         print(data['Label'].value_counts())
-            
+
         # If sample_size is None, set it to the size of the smallest class
         if sample_size is None:
             sample_size = data['Label'].value_counts().min()
