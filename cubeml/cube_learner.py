@@ -171,7 +171,7 @@ class CubeLearner:
             convergence_threshold = 0.001,
             convergence_gen = 5,
             d_model=64, num_heads=4, num_dense_layers=3,
-            n_epoch = 1000, batch_size = 256,
+            n_epoch = 500, batch_size = 256,
             **kwargs):
         """
         Fit the appropriate model to the training data.
@@ -198,6 +198,9 @@ class CubeLearner:
             
             dataset = TensorDataset(torch.tensor(self.features_train).float(), torch.tensor(self.labels_train).long())
             dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+            test_dataset = TensorDataset(torch.tensor(self.features_test).float(), torch.tensor(self.labels_test).long())
+            test_dataloader = DataLoader(test_dataset, batch_size=batch_size)
             
             writer = SummaryWriter()  # initialize the tensorboard writer
 
@@ -212,6 +215,8 @@ class CubeLearner:
             pos_enc = self.get_positional_encoding(n_input_features, d_model).to(self.device)
 
             for epoch in range(n_epoch):
+                # Training phase
+                self.model.train()
                 total_loss = 0.0
                 total_correct = 0
                 total_samples = 0
@@ -231,19 +236,41 @@ class CubeLearner:
                     loss.backward()
                     optimizer.step()
 
-                # Calculate average loss and accuracy over the epoch
-                avg_loss = total_loss / total_samples
-                accuracy = total_correct / total_samples
+                # Calculate average training loss and accuracy over the epoch
+                avg_train_loss = total_loss / total_samples
+                train_accuracy = total_correct / total_samples
+
+                # Testing phase
+                self.model.eval()
+                test_total_loss = 0.0
+                test_total_correct = 0
+                test_total_samples = 0
+
+                with torch.no_grad():
+                    for test_batch_features, test_batch_labels in test_dataloader:
+                        test_batch_features, test_batch_labels = test_batch_features.to(self.device), test_batch_labels.to(self.device)
+
+                        test_outputs = self.model(test_batch_features, pos_enc)
+                        test_loss = criterion(test_outputs, test_batch_labels)
+                        test_total_loss += test_loss.item() * test_batch_features.size(0)
+
+                        _, test_predicted = torch.max(test_outputs, 1)
+                        test_total_correct += (test_predicted == test_batch_labels).sum().item()
+                        test_total_samples += test_batch_labels.size(0)
+
+                avg_test_loss = test_total_loss / test_total_samples
+                test_accuracy = test_total_correct / test_total_samples
 
                 # Log to TensorBoard
-                writer.add_scalar("Loss/train", avg_loss, epoch)
-                writer.add_scalar("Accuracy/train", accuracy, epoch)
+                writer.add_scalar("Loss/train", avg_train_loss, epoch)
+                writer.add_scalar("Accuracy/train", train_accuracy, epoch)
+                writer.add_scalar("Loss/test", avg_test_loss, epoch)
+                writer.add_scalar("Accuracy/test", test_accuracy, epoch)
                 for name, param in self.model.named_parameters():
                     writer.add_histogram(name, param, epoch)
 
                 if verbose:
-                    print(f"Epoch {epoch+1}/{n_epoch}, Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}")
-
+                    print(f"Epoch {epoch+1}/{n_epoch}, Train Loss: {avg_train_loss:.4f}, Train Accuracy: {train_accuracy:.4f}, Test Loss: {avg_test_loss:.4f}, Test Accuracy: {test_accuracy:.4f}")
                     
             # Save predictions for training and test data
             with torch.no_grad():
@@ -284,48 +311,48 @@ class CubeLearner:
                 default_param_distributions = {
                     'RF': {
                         'n_estimators': [50,
-                                         #100,
+                                         100,
                                          150],
                         'max_depth': [5,
-                                      #10, 15,
+                                      10, 15,
                                       20],
                         'min_samples_split': [50,
-                                              #100,
+                                              100,
                                               150],
                         'min_samples_leaf': [10,
-                                             #20,
+                                             20,
                                              30],
                         'max_features': ['sqrt', 'log2'],
                         'criterion': ['gini', 'entropy']
                     },
                     'DTC': {
                         'max_depth': [5,
-                                      #10, 15,
+                                      10, 15,
                                       20],
                         'min_samples_split': [50,
-                                              #100,
+                                              100,
                                               150],
                         'min_samples_leaf': [10,
-                                             #20,
+                                             20,
                                              30],
                         'max_features': ['sqrt', 'log2'],
                         'criterion': ['gini', 'entropy']
                     },
                     'GBC': {
                         'n_estimators': [50,
-                                         #100,
+                                         100,
                                          150],
                         'learning_rate': [0.01,
-                                          #0.05,
+                                          0.05,
                                           0.1],
                         'max_depth': [2,
-                                      #3,
+                                      3,
                                       4],
                         'min_samples_leaf': [10,
-                                             #20,
+                                             20,
                                              30],
                         'max_features': [0.1,
-                                         #0.3,
+                                         0.3,
                                          0.5]
                     }
                 }
@@ -841,10 +868,15 @@ class CubeLearner:
         flattened_data = hypercube_data.reshape(num_rows * num_cols, num_bands)
 
         # Use our trained model to make predictions
-        predictions = self.model.predict(flattened_data)
+        if hasattr(self, 'model_type') and self.model_type == "TNN":  # Check if model_type is TNN (TransformerNN)
+            with torch.no_grad():
+                predictions = self.model(flattened_data)
+        else:
+            predictions = self.model.predict(flattened_data)
 
         # Reshape the predictions back into the 2D spatial configuration
         inference_map = predictions.reshape(num_rows, num_cols)
 
         # Return the predictions as a 2D array
         return inference_map
+
