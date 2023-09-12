@@ -73,6 +73,7 @@ class CubeLearner:
     class TransformerNN(nn.Module):
         def __init__(self, n_input_features, num_classes, d_model=64, num_heads=4, num_dense_layers=3, use_embedding=True):
             super(CubeLearner.TransformerNN, self).__init__()
+            self.d_model = d_model
             self.use_embedding = use_embedding
 
             if self.use_embedding:
@@ -867,10 +868,14 @@ class CubeLearner:
         num_rows, num_cols, num_bands = hypercube_data.shape
         flattened_data = hypercube_data.reshape(num_rows * num_cols, num_bands)
 
-        # Use our trained model to make predictions
-        if hasattr(self, 'model_type') and self.model_type == "TNN":  # Check if model_type is TNN (TransformerNN)
+        # Generate positional encoding for TransformerNN
+        if hasattr(self, 'model_type') and self.model_type == "TNN":
+            seq_len = flattened_data.shape[0]
+            d_model = self.model.d_model
+            pos_enc = TransformerNN.get_positional_encoding(seq_len, d_model).to(flattened_data.device)
+
             with torch.no_grad():
-                predictions = self.model(flattened_data)
+                predictions = self.model(flattened_data, pos_enc)
         else:
             predictions = self.model.predict(flattened_data)
 
@@ -879,4 +884,5 @@ class CubeLearner:
 
         # Return the predictions as a 2D array
         return inference_map
+
 
