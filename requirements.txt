@@ -1,0 +1,12 @@
+torch
+torchvision
+tensorboard
+scikit-learn
+scipy
+deap
+matplotlib
+seaborn
+pandas
+Pillow
+cubeml
+typing
