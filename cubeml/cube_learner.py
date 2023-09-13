@@ -75,6 +75,7 @@ class CubeLearner:
             super(CubeLearner.TransformerNN, self).__init__()
             self.d_model = d_model
             self.use_embedding = use_embedding
+            self.pos_enc = None
 
             if self.use_embedding:
                 self.embedding = nn.Linear(n_input_features, d_model)
@@ -213,7 +214,7 @@ class CubeLearner:
             criterion = nn.CrossEntropyLoss()
             optimizer = optim.Adam(self.model.parameters())
 
-            pos_enc = self.get_positional_encoding(n_input_features, d_model).to(self.device)
+            self.model.pos_enc = CubeLearner.get_positional_encoding(n_input_features, d_model).to(self.device)
 
             for epoch in range(n_epoch):
                 # Training phase
@@ -872,7 +873,7 @@ class CubeLearner:
         if hasattr(self, 'model_type') and self.model_type == "TNN":
             seq_len = flattened_data.shape[0]
             d_model = self.model.d_model
-            pos_enc = TransformerNN.get_positional_encoding(seq_len, d_model).to(flattened_data.device)
+            pos_enc = self.model.pos_enc.to(flattened_data.device)
 
             with torch.no_grad():
                 predictions = self.model(flattened_data, pos_enc)
