@@ -225,7 +225,7 @@ class CubeLearner:
                 for batch_features, batch_labels in dataloader:
                     batch_features, batch_labels = batch_features.to(self.device), batch_labels.to(self.device)
 
-                    outputs = self.model(batch_features, pos_enc)
+                    outputs = self.model(batch_features, self.model.pos_enc)
 
                     loss = criterion(outputs, batch_labels)
                     total_loss += loss.item() * batch_features.size(0)  # accumulate batch loss
@@ -252,7 +252,7 @@ class CubeLearner:
                     for test_batch_features, test_batch_labels in test_dataloader:
                         test_batch_features, test_batch_labels = test_batch_features.to(self.device), test_batch_labels.to(self.device)
 
-                        test_outputs = self.model(test_batch_features, pos_enc)
+                        test_outputs = self.model(test_batch_features, self.model.pos_enc)
                         test_loss = criterion(test_outputs, test_batch_labels)
                         test_total_loss += test_loss.item() * test_batch_features.size(0)
 
@@ -277,8 +277,8 @@ class CubeLearner:
             # Save predictions for training and test data
             with torch.no_grad():
                 # Added lines
-                self.results_train = torch.argmax(CubeLearner.predict_in_batches(self.model, torch.tensor(self.features_train), pos_enc, batch_size, self.device), dim=1).cpu().numpy()
-                self.results_test = torch.argmax(CubeLearner.predict_in_batches(self.model, torch.tensor(self.features_test), pos_enc, batch_size, self.device), dim=1).cpu().numpy()
+                self.results_train = torch.argmax(CubeLearner.predict_in_batches(self.model, torch.tensor(self.features_train), self.model.pos_enc, batch_size, self.device), dim=1).cpu().numpy()
+                self.results_test = torch.argmax(CubeLearner.predict_in_batches(self.model, torch.tensor(self.features_test), self.model.pos_enc, batch_size, self.device), dim=1).cpu().numpy()
                 
             writer.close()
 
@@ -869,21 +869,48 @@ class CubeLearner:
         num_rows, num_cols, num_bands = hypercube_data.shape
         flattened_data = hypercube_data.reshape(num_rows * num_cols, num_bands)
 
-        # Generate positional encoding for TransformerNN
-        if hasattr(self, 'model_type') and self.model_type == "TNN":
-            seq_len = flattened_data.shape[0]
-            d_model = self.model.d_model
-            pos_enc = self.model.pos_enc.to(flattened_data.device)
+        # Initialize the inference map
+        inference_map = np.zeros((num_rows * num_cols,))
 
-            with torch.no_grad():
-                predictions = self.model(flattened_data, pos_enc)
+        # Check if the model is a TransformerNN
+        if hasattr(self, 'model_type') and self.model_type == "TNN":
+            # Set batch size
+            batch_size = 256  # Set a suitable batch size
+
+            # Loop over the flattened data in chunks
+            for start_idx in range(0, len(flattened_data), batch_size):
+                end_idx = min(start_idx + batch_size, len(flattened_data))
+                chunk_data = flattened_data[start_idx:end_idx]
+                chunk_tensor = torch.tensor(chunk_data).to(self.device)
+
+                # Move the model to the same device if it's not already
+                self.model.to(self.device)
+
+                # Generate positional encoding for TransformerNN
+                pos_enc = self.model.pos_enc.to(self.device)
+
+                # Make predictions for the current chunk
+                with torch.no_grad():
+                    chunk_pred = self.model(chunk_tensor, pos_enc)
+                    chunk_pred = torch.argmax(chunk_pred, dim=1).cpu().numpy()
+
+                # Fill the corresponding section of the inference map with the chunk predictions
+                inference_map[start_idx:end_idx] = chunk_pred
+
         else:
-            predictions = self.model.predict(flattened_data)
+            # For non-TransformerNN models, use the model's predict method directly on the flattened data
+            inference_map = self.model.predict(flattened_data)
 
         # Reshape the predictions back into the 2D spatial configuration
-        inference_map = predictions.reshape(num_rows, num_cols)
+        inference_map = inference_map.reshape(num_rows, num_cols)
 
         # Return the predictions as a 2D array
         return inference_map
+
+
+
+
+
+
 
 
