@@ -7,23 +7,41 @@ import torch
 from gmodetector_py import Hypercube, ImageChannel, FalseColor
 from cubeml.model_evaluation import false_color_image
 
-# Custom unpickler function
-def custom_unpickler(file_path):
-    try:
-        return pickle.load(file_path)
-    except Exception as e:
-        print(f"Standard loading failed due to {e}. Trying with map_location...")
-        return torch.load(file_path, map_location=torch.device('cpu'))
+def load_data(file_path):
+    file_extension = os.path.splitext(file_path)[1]
+    if file_extension == '.pt':
+        # Loading PyTorch model
+        model = MyFabulousPytorchModel()  # Replace with actual model class
+        model.load_state_dict(torch.load(file_path))
+        return model
+    elif file_extension == '.pkl':
+        # Loading pickle file
+        with open(file_path, 'rb') as f:
+            data = pickle.load(f)
+        if isinstance(data, CubeSchool):
+            # Handle CubeSchool object
+            return data
+        elif isinstance(data, CubeLearner):
+            # Handle CubeLearner object
+            return data
+        else:
+            raise ValueError("Unsupported pickle object type.")
+    else:
+        raise ValueError("Unsupported file type.")
 
-def batch_inference(directory, school_pickle, method, string_to_exclude=None, false_color=False, green_cap=563, red_cap=904, blue_cap=406, green_wavelength="533.7419", red_wavelength="563.8288", blue_wavelength="500.0404", min_wavelength=400, max_wavelength=1000):
-    with open(school_pickle, 'rb') as f:
-        school = custom_unpickler(f)
-
-    if method not in school.learner_dict:
-        print(f"Method {method} not found in the provided CubeSchool.")
-        return
-
-    learner = school.learner_dict[method]
+def batch_inference(directory, data_file, method, **kwargs):
+    data = load_data(data_file)
+    if isinstance(data, CubeSchool):
+        # Extract CubeLearner from CubeSchool
+        learner = data.learner_dict.get(method)
+        if learner is None:
+            print(f"Method {method} not found in the provided CubeSchool.")
+            return
+    elif isinstance(data, CubeLearner):
+        learner = data
+    else:
+        # Handle PyTorch model
+        learner = data
 
     files = os.listdir(directory)
     files = [os.path.join(directory, file) for file in files if string_to_exclude is None or string_to_exclude not in file]
