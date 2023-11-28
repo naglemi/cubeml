@@ -7,23 +7,77 @@ import torch
 from gmodetector_py import Hypercube, ImageChannel, FalseColor
 from cubeml.model_evaluation import false_color_image
 
-# Custom unpickler function
-def custom_unpickler(file_path):
-    try:
-        return pickle.load(file_path)
-    except Exception as e:
-        print(f"Standard loading failed due to {e}. Trying with map_location...")
-        return torch.load(file_path, map_location=torch.device('cpu'))
+def load_cubelearner_state(file_prefix, save_dir="./):
+    # This function exists so we can load pytorch models onto CPU when they were made on GPU
+    #   while also loading all other attributes in the CubeLearner object.
+    #   We are basically recreating the CubeLearner object by putting these two pieces back together
+    #   after running CubeLearner.save_state_for_cpu
+    # Define file paths using the provided prefix
+    model_path = os.path.join(save_dir, f"{file_prefix}_model_state.pt")
+    state_path = os.path.join(save_dir, f"{file_prefix}_learner_state.pkl")
 
-def batch_inference(directory, school_pickle, method, string_to_exclude=None, false_color=False, green_cap=563, red_cap=904, blue_cap=406, green_wavelength="533.7419", red_wavelength="563.8288", blue_wavelength="500.0404", min_wavelength=400, max_wavelength=1000):
-    with open(school_pickle, 'rb') as f:
-        school = custom_unpickler(f)
+    # Load the learner's state
+    with open(state_path, 'rb') as f:
+        state = pickle.load(f)
 
-    if method not in school.learner_dict:
-        print(f"Method {method} not found in the provided CubeSchool.")
-        return
+    # Create a new CubeLearner instance with minimal initialization
+    learner = CubeLearner(training_data=None, model_type=state['model_type'], init_minimal=True)
+    
+    # Update the new instance with loaded state
+    learner.__dict__.update(state)
 
-    learner = school.learner_dict[method]
+    # Initialize the model based on the model_type
+    if learner.model_type == "TNN":
+        # Assuming the model class is defined within CubeLearner
+        model_class = getattr(CubeLearner, "TransformerNN")
+        # Assuming n_input_features and num_classes can be inferred from loaded state
+        n_input_features = state['features'].shape[1] if state['features'] is not None else None
+        num_classes = len(state['labels_dict']) if state['labels_dict'] is not None else None
+        learner.model = model_class(n_input_features=n_input_features, num_classes=num_classes)
+        learner.model.load_state_dict(torch.load(model_path, map_location='cpu'))
+    else:
+        raise ValueError(f"Unknown model type: {learner.model_type}")
+
+    return learner
+
+def load_data(file_path):
+    # Extract the directory and file prefix
+    file_dir = os.path.dirname(file_path)
+    file_prefix = os.path.splitext(os.path.basename(file_path))[0]
+    file_extension = os.path.splitext(file_path)[1]
+
+    if file_extension == '.pt':
+        # Construct the full paths for .pt and .pkl files
+        pt_filepath = os.path.join(file_dir, f"{file_prefix}.pt")
+        pkl_filepath = os.path.join(file_dir, f"{file_prefix}.pkl")
+        return load_cubelearner_state(file_prefix, file_dir)
+    elif file_extension == '.pkl':
+        # Loading pickle file
+        with open(file_path, 'rb') as f:
+            data = pickle.load(f)
+        if isinstance(data, CubeSchool):
+            # Handle CubeSchool object
+            return data
+        elif isinstance(data, CubeLearner):
+            # Handle CubeLearner object
+            return data
+        else:
+            raise ValueError("Unsupported pickle object type.")
+    else:
+        raise ValueError("Unsupported file type.")
+
+def batch_inference(directory, data_file, method, **kwargs):
+    data = load_data(data_file)
+    if isinstance(data, CubeSchool):
+        # Extract CubeLearner from CubeSchool
+        learner = data.learner_dict.get(method)
+        if learner is None:
+            print(f"Method {method} not found in the provided CubeSchool.")
+            return
+    elif isinstance(data, CubeLearner):
+        learner = data
+    else:
+        learner = data
 
     files = os.listdir(directory)
     files = [os.path.join(directory, file) for file in files if string_to_exclude is None or string_to_exclude not in file]
