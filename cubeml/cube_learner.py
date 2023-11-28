@@ -40,35 +40,41 @@ models_dict = {
 
 
 class CubeLearner:
-    def __init__(self, training_data, model_type, colors=None,
-                 train_test=False, test_size=0.2):
-        self.training_data = training_data
-        self.features = training_data.features
-        self.labels = training_data.labels
-        self.colors = colors
-        self.labels_char = training_data.labels_char
-        self.labels_dict = {i: label for i, label in enumerate(self.labels_char)}
-        self.model_type = model_type
-        self.train_test = train_test
-        self.test_size = test_size
-        self.model = None
-        self.cfx_train = None
-        self.cfx_test = None
-        self.iou_dict_list_train = []
-        self.iou_dict_list_test = []
-        self.miou_list_train = []
-        self.miou_list_test = []
-        self.results = None
-        self.results_train = None
-        self.results_test = None
-        self.labels_train = None
-        self.labels_test = None
-        self.training_time = None
-        self.wavelengths_dict = training_data.wavelengths_dict
-        self.feature_names = None
-        self.num_classes = np.unique(self.labels).shape[0]  # Assuming labels are numerical and start from 0
-        self.optimal_params = None
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    def __init__(self, training_data, model_type, colors=None, train_test=False, test_size=0.2, init_minimal=False):
+        if init_minimal:
+            # Minimal initialization (skip setting attributes that require training_data)
+            self.model_type = model_type
+            self.colors = colors
+            self.model = None
+        else:
+            # Standard initialization as before
+            self.training_data = training_data
+            self.features = training_data.features
+            self.labels = training_data.labels
+            self.colors = colors
+            self.labels_char = training_data.labels_char
+            self.labels_dict = {i: label for i, label in enumerate(self.labels_char)}
+            self.model_type = model_type
+            self.train_test = train_test
+            self.test_size = test_size
+            self.model = None
+            self.cfx_train = None
+            self.cfx_test = None
+            self.iou_dict_list_train = []
+            self.iou_dict_list_test = []
+            self.miou_list_train = []
+            self.miou_list_test = []
+            self.results = None
+            self.results_train = None
+            self.results_test = None
+            self.labels_train = None
+            self.labels_test = None
+            self.training_time = None
+            self.wavelengths_dict = training_data.wavelengths_dict
+            self.feature_names = None
+            self.num_classes = np.unique(self.labels).shape[0]  # Assuming labels are numerical and start from 0
+            self.optimal_params = None
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
     class TransformerNN(nn.Module):
         def __init__(self, n_input_features, num_classes, d_model=64, num_heads=4, num_dense_layers=3, use_embedding=True):
@@ -863,6 +869,24 @@ class CubeLearner:
                 plt.title(f'{self.model_type} {ylabel} Over Wavelength', fontsize=14)
                 plt.show()
 
+    def save_state_for_cpu(self, file_prefix, save_dir="./"):
+        # This method exists to support cases when we train a torch model on GPU
+        #  and want to load on CPU later without running into errors
+        
+        # Define file paths using the provided prefix
+        model_path = os.path.join(save_dir, f"{file_prefix}_model_state.pt")
+        state_path = os.path.join(save_dir, f"{file_prefix}_learner_state.pkl")
+
+        # Save the model's state_dict
+        torch.save(self.model.state_dict(), model_path)
+
+        # Save other attributes of the CubeLearner instance
+        state = self.__dict__.copy()
+        del state['model']  # Remove the model attribute
+        with open(state_path, 'wb') as f:
+            pickle.dump(state, f)
+
+        return model_path, state_path
 
     def infer(self, hypercube_data):
         # Flatten the 3D hypercube into 2D so we can run our classifier on it
