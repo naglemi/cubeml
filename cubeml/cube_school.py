@@ -20,14 +20,18 @@ class CubeSchool:
             
             # Fit the model
             if model_type in ["RF"]:
-                self.learner_dict[model_type].fit(max_depth = 40,
-                            min_samples_split = 125,
-                            min_samples_leaf = 62,
-                            n_estimators = 400)
+                self.learner_dict[model_type].fit(max_depth = 23,
+                                                  criterion = 'entropy',
+                                                  max_features = 'sqrt',
+                                                  min_samples_leaf = 8,
+                                                  min_samples_split = 41,
+                                                  n_estimators = 163)
             elif model_type in ["DTC"]:
-                self.learner_dict[model_type].fit(max_depth = 40,
-                        min_samples_split = 125,
-                        min_samples_leaf = 62)
+                self.learner_dict[model_type].fit(max_depth = 23,
+                                                  criterion = 'entropy',
+                                                  max_features = 'sqrt',
+                                                  min_samples_leaf = 8,
+                                                  min_samples_split = 41)
             else: 
                 self.learner_dict[model_type].fit()
 
@@ -90,6 +94,18 @@ class CubeSchool:
                 # Save the visualization
                 plt.savefig(f"{output_dir}{model_type}_{data_type}_plot.png")
                 plt.close()  # Close the plot
+
+    def save_cubelearners_from_cubeschool(self, file_prefix, save_dir="./"):
+    for key, learner in self.learner_dict.items():
+        if learner.model_type == 'TNN':
+            continue  # Skip TNN models
+
+        # Define the filename for the pkl file
+        model_filename = os.path.join(save_dir, f"{file_prefix}_{key}.pkl")
+
+        # Save the entire CubeLearner object to a pkl file
+        with open(model_filename, 'wb') as f:
+            pickle.dump(learner, f)
 
     def run(self):
         self.fit_models()
