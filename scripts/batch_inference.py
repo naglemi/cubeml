@@ -7,7 +7,7 @@ import torch
 from gmodetector_py import Hypercube, ImageChannel, FalseColor
 from cubeml.model_evaluation import false_color_image
 
-def load_cubelearner_state(file_prefix, save_dir="./):
+def load_cubelearner_state(file_prefix, save_dir="./"):
     # This function exists so we can load pytorch models onto CPU when they were made on GPU
     #   while also loading all other attributes in the CubeLearner object.
     #   We are basically recreating the CubeLearner object by putting these two pieces back together
