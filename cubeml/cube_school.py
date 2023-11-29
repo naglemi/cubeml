@@ -96,16 +96,16 @@ class CubeSchool:
                 plt.close()  # Close the plot
 
     def save_cubelearners_from_cubeschool(self, file_prefix, save_dir="./"):
-    for key, learner in self.learner_dict.items():
-        if learner.model_type == 'TNN':
-            continue  # Skip TNN models
-
-        # Define the filename for the pkl file
-        model_filename = os.path.join(save_dir, f"{file_prefix}_{key}.pkl")
-
-        # Save the entire CubeLearner object to a pkl file
-        with open(model_filename, 'wb') as f:
-            pickle.dump(learner, f)
+        for key, learner in self.learner_dict.items():
+            if learner.model_type == 'TNN':
+                continue  # Skip TNN models
+    
+            # Define the filename for the pkl file
+            model_filename = os.path.join(save_dir, f"{file_prefix}_{key}.pkl")
+    
+            # Save the entire CubeLearner object to a pkl file
+            with open(model_filename, 'wb') as f:
+                pickle.dump(learner, f)
 
     def run(self):
         self.fit_models()
