@@ -143,4 +143,15 @@ if __name__ == "__main__":
                         help='Wavelength for blue channel.')
     args = parser.parse_args()
 
-    batch_inference(args.dir, args.pickle, args.method, args.string_to_exclude, args.false_color, args.green_cap, args.red_cap, args.blue_cap, args.green_wavelength, args.red_wavelength, args.blue_wavelength)
+    batch_inference(directory=args.dir,
+                    data_file=args.pickle,
+                    method=args.method,
+                    string_to_exclude=args.string_to_exclude,
+                    false_color=args.false_color,
+                    green_cap=args.green_cap,
+                    red_cap=args.red_cap,
+                    blue_cap=args.blue_cap,
+                    green_wavelength=args.green_wavelength,
+                    red_wavelength=args.red_wavelength,
+                    blue_wavelength=args.blue_wavelength)
+
