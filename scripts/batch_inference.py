@@ -68,7 +68,7 @@ def load_data(file_path):
     else:
         raise ValueError("Unsupported file type.")
 
-def batch_inference(directory, data_file, method, **kwargs):
+def batch_inference(directory, data_file, method, string_to_exclude, false_color, green_cap, red_cap, blue_cap, min_wavelength, max_wavelength, green_wavelength, red_wavelength, blue_wavelength):
     data = load_data(data_file)
     if isinstance(data, CubeSchool):
         # Extract CubeLearner from CubeSchool
@@ -123,7 +123,7 @@ if __name__ == "__main__":
                         help='Path to the pickled CubeSchool object.')
     parser.add_argument('--method', type=str, required=True,
                         help='Inference method (e.g., "RF", "PCA").')
-    parser.add_argument('--string_to_exclude', type=str,
+    parser.add_argument('--string_to_exclude', type=str, default=None,
                         help='String to identify files to be excluded from processing.')
     parser.add_argument('--false_color', action='store_true',
                         help='Generate false color images.')
