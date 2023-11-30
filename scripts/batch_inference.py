@@ -20,23 +20,23 @@ def load_cubelearner_state(file_prefix, save_dir="./"):
 
     # Load the learner's state
     with open(state_path, 'rb') as f:
-        state = pickle.load(f)
+        learner = pickle.load(f)
+        print(type(learner))
 
     # Create a new CubeLearner instance with minimal initialization
-    learner = CubeLearner(training_data=None, model_type=state['model_type'], init_minimal=True)
+    #learner = CubeLearner(training_data=None, model_type=state['model_type'], init_minimal=True)
     
     # Update the new instance with loaded state
-    learner.__dict__.update(state)
+    #learner.__dict__.update(state)
 
     # Initialize the model based on the model_type
     if learner.model_type == "TNN":
         # Assuming the model class is defined within CubeLearner
         model_class = getattr(CubeLearner, "TransformerNN")
-        # Assuming n_input_features and num_classes can be inferred from loaded state
-        n_input_features = state['features'].shape[1] if state['features'] is not None else None
-        num_classes = len(state['labels_dict']) if state['labels_dict'] is not None else None
+
         learner.model = model_class(n_input_features=n_input_features, num_classes=num_classes)
-        learner.model.load_state_dict(torch.load(model_path, map_location='cpu'))
+        map_location = "gpu" if torch.cuda.is_available() else "cpu"
+        learner.model.load_state_dict(torch.load(model_path, map_location=map_location))
     else:
         raise ValueError(f"Unknown model type: {learner.model_type}")
 
@@ -80,6 +80,29 @@ def batch_inference(directory, data_file, method, string_to_exclude, false_color
         learner = data
     else:
         learner = data
+        
+    # Check CubeLearner attributes
+    print("Model Type:", learner.model_type)
+    print("Device:", learner.device)
+    print("Number of Classes:", learner.num_classes)
+
+    # Check if the model is correctly loaded
+    if learner.model is not None:
+        # Check TransformerNN model attributes
+        print("Model d_model:", getattr(learner.model, 'd_model', None))
+        print("Model use_embedding:", getattr(learner.model, 'use_embedding', None))
+        print("Model num_classes:", getattr(learner.model, 'num_classes', None))
+        print("Positional Encoding (pos_enc):", getattr(learner.model, 'pos_enc', None))
+    else:
+        print("Model not loaded correctly.")
+
+    # Additional check to ensure the model is of the expected type
+    if isinstance(learner.model, CubeLearner.TransformerNN):
+        print("Model is a TransformerNN.")
+    else:
+        print("Model is not a TransformerNN.")
+        
+    learner.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     files = os.listdir(directory)
     files = [os.path.join(directory, file) for file in files if string_to_exclude is None or string_to_exclude not in file]
@@ -143,6 +166,7 @@ if __name__ == "__main__":
                         help='Wavelength for red channel.')
     parser.add_argument('--blue_wavelength', type=str, default="500.0404",
                         help='Wavelength for blue channel.')
+                        
     args = parser.parse_args()
 
     batch_inference(directory=args.dir,

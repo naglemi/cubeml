@@ -869,24 +869,27 @@ class CubeLearner:
                 plt.title(f'{self.model_type} {ylabel} Over Wavelength', fontsize=14)
                 plt.show()
 
-    def save_state_for_cpu(self, file_prefix, save_dir="./"):
-        # This method exists to support cases when we train a torch model on GPU
-        #  and want to load on CPU later without running into errors
-        
+    def save_for_cpu(self, file_prefix, save_dir="./"):
         # Define file paths using the provided prefix
-        model_path = os.path.join(save_dir, f"{file_prefix}_model_state.pt")
-        state_path = os.path.join(save_dir, f"{file_prefix}_learner_state.pkl")
+        model_path = os.path.join(save_dir, f"{file_prefix}.pt")
+        state_path = os.path.join(save_dir, f"{file_prefix}.pkl")
 
         # Save the model's state_dict
         torch.save(self.model.state_dict(), model_path)
 
-        # Save other attributes of the CubeLearner instance
-        state = self.__dict__.copy()
-        del state['model']  # Remove the model attribute
+        # Temporarily remove the model attribute for pickling
+        original_model = self.model
+        self.model = "Removed_so_we_can_load_separately_on_CPU"
+
+        # Save the CubeLearner instance
         with open(state_path, 'wb') as f:
-            pickle.dump(state, f)
+            pickle.dump(self, f)
+
+        # Restore the model attribute
+        self.model = original_model
 
         return model_path, state_path
+
 
     def infer(self, hypercube_data):
         # Flatten the 3D hypercube into 2D so we can run our classifier on it
@@ -900,6 +903,8 @@ class CubeLearner:
         if hasattr(self, 'model_type') and self.model_type == "TNN":
             # Set batch size
             batch_size = 256  # Set a suitable batch size
+            if self.pos_enc is None:
+            	self.pos_enc = get_positional_encoding(seq_len=self.n_input_features, d_model=self.d_model)
 
             # Loop over the flattened data in chunks
             for start_idx in range(0, len(flattened_data), batch_size):
