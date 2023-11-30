@@ -155,5 +155,8 @@ if __name__ == "__main__":
                     blue_cap=args.blue_cap,
                     green_wavelength=args.green_wavelength,
                     red_wavelength=args.red_wavelength,
-                    blue_wavelength=args.blue_wavelength)
+                    blue_wavelength=args.blue_wavelength,
+                    min_wavelength=args.min_wavelength,
+                    max_wavelength=args.max_wavelength
+                    )
 
