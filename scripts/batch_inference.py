@@ -6,6 +6,8 @@ import argparse
 import torch
 from gmodetector_py import Hypercube, ImageChannel, FalseColor
 from cubeml.model_evaluation import false_color_image
+from cubeml import CubeLearner
+from cubeml import CubeSchool
 
 def load_cubelearner_state(file_prefix, save_dir="./"):
     # This function exists so we can load pytorch models onto CPU when they were made on GPU
@@ -13,8 +15,8 @@ def load_cubelearner_state(file_prefix, save_dir="./"):
     #   We are basically recreating the CubeLearner object by putting these two pieces back together
     #   after running CubeLearner.save_state_for_cpu
     # Define file paths using the provided prefix
-    model_path = os.path.join(save_dir, f"{file_prefix}_model_state.pt")
-    state_path = os.path.join(save_dir, f"{file_prefix}_learner_state.pkl")
+    model_path = os.path.join(save_dir, f"{file_prefix}.pt")
+    state_path = os.path.join(save_dir, f"{file_prefix}.pkl")
 
     # Load the learner's state
     with open(state_path, 'rb') as f:
