@@ -10,35 +10,18 @@ from cubeml import CubeLearner
 from cubeml import CubeSchool
 
 def load_cubelearner_state(file_prefix, save_dir="./"):
-    # This function exists so we can load pytorch models onto CPU when they were made on GPU
-    #   while also loading all other attributes in the CubeLearner object.
-    #   We are basically recreating the CubeLearner object by putting these two pieces back together
-    #   after running CubeLearner.save_state_for_cpu
-    # Define file paths using the provided prefix
-    model_path = os.path.join(save_dir, f"{file_prefix}.pt")
-    state_path = os.path.join(save_dir, f"{file_prefix}.pkl")
+    model_path = os.path.join(save_dir, f"{file_prefix}_model.pt")
+    state_path = os.path.join(save_dir, f"{file_prefix}_state.pkl")
+    
+    # Load the saved model
+    model = torch.load(model_path, map_location=torch.device('cpu'))
 
-    # Load the learner's state
+    # Load the rest of the learner's state from pickle
     with open(state_path, 'rb') as f:
         learner = pickle.load(f)
-        print(type(learner))
 
-    # Create a new CubeLearner instance with minimal initialization
-    #learner = CubeLearner(training_data=None, model_type=state['model_type'], init_minimal=True)
-    
-    # Update the new instance with loaded state
-    #learner.__dict__.update(state)
-
-    # Initialize the model based on the model_type
-    if learner.model_type == "TNN":
-        # Assuming the model class is defined within CubeLearner
-        model_class = getattr(CubeLearner, "TransformerNN")
-
-        learner.model = model_class(n_input_features=n_input_features, num_classes=num_classes)
-        map_location = "gpu" if torch.cuda.is_available() else "cpu"
-        learner.model.load_state_dict(torch.load(model_path, map_location=map_location))
-    else:
-        raise ValueError(f"Unknown model type: {learner.model_type}")
+    # Attach the model to the learner
+    learner.model = model
 
     return learner
 
@@ -50,8 +33,8 @@ def load_data(file_path):
 
     if file_extension == '.pt':
         # Construct the full paths for .pt and .pkl files
-        pt_filepath = os.path.join(file_dir, f"{file_prefix}.pt")
-        pkl_filepath = os.path.join(file_dir, f"{file_prefix}.pkl")
+        #pt_filepath = os.path.join(file_dir, f"{file_prefix}.pt")
+        #pkl_filepath = os.path.join(file_dir, f"{file_prefix}.pkl")
         return load_cubelearner_state(file_prefix, file_dir)
     elif file_extension == '.pkl':
         # Loading pickle file
@@ -67,8 +50,51 @@ def load_data(file_path):
             raise ValueError("Unsupported pickle object type.")
     else:
         raise ValueError("Unsupported file type.")
+        
+def infer(learner, hypercube_data, batch_size=256):
+    # Flatten the 3D hypercube into 2D so we can run our classifier on it
+    print("Current version sanity test1")
+    num_rows, num_cols, num_bands = hypercube_data.shape
+    flattened_data = hypercube_data.reshape(num_rows * num_cols, num_bands)
 
-def batch_inference(directory, data_file, method, string_to_exclude, false_color, green_cap, red_cap, blue_cap, min_wavelength, max_wavelength, green_wavelength, red_wavelength, blue_wavelength):
+    # Initialize the inference map
+    inference_map = np.zeros((num_rows * num_cols,))
+
+    # Check if the model is a TransformerNN
+    if hasattr(learner, 'model_type') and learner.model_type == "TNN":
+        print("Current version sanity test2")
+        #if learner.pos_enc is None:
+        #	learner.pos_enc = get_positional_encoding(seq_len=learner.n_input_features, d_model=learner.d_model)
+
+        # Loop over the flattened data in chunks
+        for start_idx in range(0, len(flattened_data), batch_size):
+            end_idx = min(start_idx + batch_size, len(flattened_data))
+            chunk_data = flattened_data[start_idx:end_idx]
+            chunk_tensor = torch.tensor(chunk_data).to(learner.device)
+
+            # Move the model to the same device if it's not already
+            learner.model.to(learner.device)
+
+            # Make predictions for the current chunk
+            with torch.no_grad():
+                chunk_pred = learner.model(chunk_tensor, learner.model.pos_enc.to(learner.device))
+                chunk_pred = torch.argmax(chunk_pred, dim=1).cpu().numpy()
+
+            # Fill the corresponding section of the inference map with the chunk predictions
+            inference_map[start_idx:end_idx] = chunk_pred
+
+    else:
+        # For non-TransformerNN models, use the model's predict method directly on the flattened data
+        inference_map = learner.model.predict(flattened_data)
+
+    # Reshape the predictions back into the 2D spatial configuration
+    inference_map = inference_map.reshape(num_rows, num_cols)
+
+    # Return the predictions as a 2D array
+    return inference_map
+
+def batch_inference(directory, data_file, method, string_to_exclude, false_color, green_cap, red_cap, blue_cap, min_wavelength, max_wavelength, green_wavelength, red_wavelength, blue_wavelength, use_quantization=False):
+    
     data = load_data(data_file)
     if isinstance(data, CubeSchool):
         # Extract CubeLearner from CubeSchool
@@ -81,62 +107,78 @@ def batch_inference(directory, data_file, method, string_to_exclude, false_color
     else:
         learner = data
         
-    # Check CubeLearner attributes
-    print("Model Type:", learner.model_type)
-    print("Device:", learner.device)
-    print("Number of Classes:", learner.num_classes)
+#     # Check CubeLearner attributes
+#     print("Model Type:", learner.model_type)
+#     print("Device:", learner.device)
+#     print("Number of Classes:", learner.num_classes)
 
-    # Check if the model is correctly loaded
-    if learner.model is not None:
-        # Check TransformerNN model attributes
-        print("Model d_model:", getattr(learner.model, 'd_model', None))
-        print("Model use_embedding:", getattr(learner.model, 'use_embedding', None))
-        print("Model num_classes:", getattr(learner.model, 'num_classes', None))
-        print("Positional Encoding (pos_enc):", getattr(learner.model, 'pos_enc', None))
-    else:
-        print("Model not loaded correctly.")
+#     # Check if the model is correctly loaded
+#     if learner.model is not None:
+#         # Check TransformerNN model attributes
+#         print("Model d_model:", getattr(learner.model, 'd_model', None))
+#         print("Model use_embedding:", getattr(learner.model, 'use_embedding', None))
+#         print("Model num_classes:", getattr(learner, 'num_classes', None))
+#         print("Positional Encoding (pos_enc):", getattr(learner.model, 'pos_enc', None))
+#     else:
+#         print("Model not loaded correctly.")
 
-    # Additional check to ensure the model is of the expected type
-    if isinstance(learner.model, CubeLearner.TransformerNN):
-        print("Model is a TransformerNN.")
-    else:
-        print("Model is not a TransformerNN.")
+#     # Additional check to ensure the model is of the expected type
+#     if isinstance(learner.model, CubeLearner.TransformerNN):
+#         print("Model is a TransformerNN.")
+#     else:
+#         print("Model is not a TransformerNN.")
         
     learner.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     files = os.listdir(directory)
-    files = [os.path.join(directory, file) for file in files if string_to_exclude is None or string_to_exclude not in file]
+    files = [os.path.join(directory, file) for file in files if file.endswith("_Broadband.hdr") and (string_to_exclude is None or string_to_exclude not in file)]
+    
+    if use_quantization:
+        learner.model = torch.quantization.quantize_dynamic(
+        learner.model, {nn.Linear, nn.MultiheadAttention}, dtype=torch.qint8)
 
     for filename in files:
-        if filename.endswith("_Broadband.hdr"):
-            print("Loading img " + filename)
-            hypercube_data = Hypercube(filename, min_desired_wavelength=min_wavelength, max_desired_wavelength=max_wavelength)
+        
+        if filename == files[0]:
+            prof = torch.profiler.profile(with_stack=True, profile_memory=True, record_shapes=True)
+            prof.start()
+        #if filename.endswith("_Broadband.hdr"):
+        print("Loading img " + filename)
+        hypercube_data = Hypercube(filename, min_desired_wavelength=min_wavelength, max_desired_wavelength=max_wavelength)
 
-            inference_map = learner.infer(hypercube_data.hypercube)
+        #inference_map = learner.infer(hypercube_data.hypercube)
+        inference_map = infer(learner, hypercube_data.hypercube)
 
-            output_filename = filename.replace("_Broadband.hdr", "_segment_uncropped_processed.png")
-            output_filename = os.path.join(directory, output_filename)
 
-            # Generate and save the false color image from the segmentation map
-            seg_false_color = false_color_image(predictions=inference_map, colors=learner.colors)
-            seg_false_color.save(output_filename)
+        output_filename = filename.replace("_Broadband.hdr", "_segment_uncropped_processed.png")
+        output_filename = os.path.join(directory, output_filename)
 
-            if false_color:
-                # Generate and save the false color image from the original hypercube
-                print("Saving out false color RGB in addition to segmentation mask")
-                rgb_false_color = FalseColor([
-                    ImageChannel(hypercube=hypercube_data, desired_component_or_wavelength=green_wavelength, color='green', cap=green_cap),
-                    ImageChannel(hypercube=hypercube_data, desired_component_or_wavelength=red_wavelength, color='red', cap=red_cap),
-                    ImageChannel(hypercube=hypercube_data, desired_component_or_wavelength=blue_wavelength, color='blue', cap=blue_cap)
-                ])
-                
-                rgb_false_color.image = rgb_false_color.image.rotate(-90, expand=True)
-                
-                rgb_false_color.save(os.path.basename(output_filename.replace("_segment_uncropped_processed.png",
-                                                                              "_rgb_processed.png")),
-                                     output_dir = directory)
+        # Generate and save the false color image from the segmentation map
+        seg_false_color = false_color_image(predictions=inference_map, colors=learner.colors)
+        seg_false_color.save(output_filename)
 
-            print(f"Inference completed for {filename}. Results saved as {output_filename}.")
+        if false_color:
+            # Generate and save the false color image from the original hypercube
+            print("Saving out false color RGB in addition to segmentation mask")
+            rgb_false_color = FalseColor([
+                ImageChannel(hypercube=hypercube_data, desired_component_or_wavelength=green_wavelength, color='green', cap=green_cap),
+                ImageChannel(hypercube=hypercube_data, desired_component_or_wavelength=red_wavelength, color='red', cap=red_cap),
+                ImageChannel(hypercube=hypercube_data, desired_component_or_wavelength=blue_wavelength, color='blue', cap=blue_cap)
+            ])
+
+            rgb_false_color.image = rgb_false_color.image.rotate(-90, expand=True)
+
+            rgb_false_color.save(os.path.basename(output_filename.replace("_segment_uncropped_processed.png",
+                                                                          "_rgb_processed.png")),
+                                 output_dir = directory)
+
+        print(f"Inference completed for {filename}. Results saved as {output_filename}.")
+        if filename == files[0]:
+            prof.stop()
+            with open("profiler_output.txt", "w") as f:
+                f.write(prof.key_averages().table(sort_by="cpu_time_total", row_limit=1000))
+
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run batch inference on a folder of hyperspectral images.")
@@ -166,7 +208,9 @@ if __name__ == "__main__":
                         help='Wavelength for red channel.')
     parser.add_argument('--blue_wavelength', type=str, default="500.0404",
                         help='Wavelength for blue channel.')
-                        
+    parser.add_argument('--use_quantization', action='store_true',
+                        help='Enable quantization for faster inference on CPU.')
+
     args = parser.parse_args()
 
     batch_inference(directory=args.dir,
@@ -181,6 +225,7 @@ if __name__ == "__main__":
                     red_wavelength=args.red_wavelength,
                     blue_wavelength=args.blue_wavelength,
                     min_wavelength=args.min_wavelength,
-                    max_wavelength=args.max_wavelength
+                    max_wavelength=args.max_wavelength,
+                    use_quantization=args.use_quantization
                     )
 

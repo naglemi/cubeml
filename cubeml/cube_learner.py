@@ -869,30 +869,30 @@ class CubeLearner:
                 plt.title(f'{self.model_type} {ylabel} Over Wavelength', fontsize=14)
                 plt.show()
 
-    def save_for_cpu(self, file_prefix, save_dir="./"):
-        # Define file paths using the provided prefix
-        model_path = os.path.join(save_dir, f"{file_prefix}.pt")
-        state_path = os.path.join(save_dir, f"{file_prefix}.pkl")
+    def save_cubelearner_state(learner, file_prefix, save_dir="./"):
+        model_path = os.path.join(save_dir, f"{file_prefix}_model.pt")
+        state_path = os.path.join(save_dir, f"{file_prefix}_state.pkl")
 
-        # Save the model's state_dict
-        torch.save(self.model.state_dict(), model_path)
+        # Move the model to CPU and save the entire model
+        learner.model.to('cpu')
+        torch.save(learner.model, model_path)
 
-        # Temporarily remove the model attribute for pickling
-        original_model = self.model
-        self.model = "Removed_so_we_can_load_separately_on_CPU"
+        # Temporarily remove the model attribute for pickling the rest of the learner
+        original_model = learner.model
+        learner.model = None
 
-        # Save the CubeLearner instance
+        # Save the rest of the CubeLearner instance
         with open(state_path, 'wb') as f:
-            pickle.dump(self, f)
+            pickle.dump(learner, f)
 
         # Restore the model attribute
-        self.model = original_model
+        learner.model = original_model
 
         return model_path, state_path
 
-
-    def infer(self, hypercube_data):
+    def infer(self, hypercube_data, batch_size=256):
         # Flatten the 3D hypercube into 2D so we can run our classifier on it
+        print("Current version sanity test1")
         num_rows, num_cols, num_bands = hypercube_data.shape
         flattened_data = hypercube_data.reshape(num_rows * num_cols, num_bands)
 
@@ -901,10 +901,9 @@ class CubeLearner:
 
         # Check if the model is a TransformerNN
         if hasattr(self, 'model_type') and self.model_type == "TNN":
-            # Set batch size
-            batch_size = 256  # Set a suitable batch size
-            if self.pos_enc is None:
-            	self.pos_enc = get_positional_encoding(seq_len=self.n_input_features, d_model=self.d_model)
+            print("Current version sanity test2")
+            #if self.pos_enc is None:
+            #	self.pos_enc = get_positional_encoding(seq_len=self.n_input_features, d_model=self.d_model)
 
             # Loop over the flattened data in chunks
             for start_idx in range(0, len(flattened_data), batch_size):
@@ -915,12 +914,9 @@ class CubeLearner:
                 # Move the model to the same device if it's not already
                 self.model.to(self.device)
 
-                # Generate positional encoding for TransformerNN
-                pos_enc = self.model.pos_enc.to(self.device)
-
                 # Make predictions for the current chunk
                 with torch.no_grad():
-                    chunk_pred = self.model(chunk_tensor, pos_enc)
+                    chunk_pred = learner.model(chunk_tensor, learner.model.pos_enc.to(learner.device))
                     chunk_pred = torch.argmax(chunk_pred, dim=1).cpu().numpy()
 
                 # Fill the corresponding section of the inference map with the chunk predictions
