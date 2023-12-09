@@ -139,9 +139,9 @@ def batch_inference(directory, data_file, method, string_to_exclude, false_color
 
     for filename in files:
         
-        if filename == files[0]:
-            prof = torch.profiler.profile(with_stack=True, profile_memory=True, record_shapes=True)
-            prof.start()
+        #if filename == files[0]:
+        #    prof = torch.profiler.profile(with_stack=True, profile_memory=True, record_shapes=True)
+        #    prof.start()
         #if filename.endswith("_Broadband.hdr"):
         print("Loading img " + filename)
         hypercube_data = Hypercube(filename, min_desired_wavelength=min_wavelength, max_desired_wavelength=max_wavelength)
@@ -173,10 +173,10 @@ def batch_inference(directory, data_file, method, string_to_exclude, false_color
                                  output_dir = directory)
 
         print(f"Inference completed for {filename}. Results saved as {output_filename}.")
-        if filename == files[0]:
-            prof.stop()
-            with open("profiler_output.txt", "w") as f:
-                f.write(prof.key_averages().table(sort_by="cpu_time_total", row_limit=1000))
+        #if filename == files[0]:
+        #    prof.stop()
+        #    with open("profiler_output.txt", "w") as f:
+        #        f.write(prof.key_averages().table(sort_by="cpu_time_total", row_limit=1000))
 
 
 
