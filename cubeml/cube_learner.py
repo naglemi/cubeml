@@ -932,6 +932,10 @@ class CubeLearner:
         # Return the predictions as a 2D array
         return inference_map
 
+    def new_infer(self, *args, **kwargs):
+        # Placeholder method, the actual implementation is not needed here
+        pass
+
 
 
 
